@@ -1,0 +1,49 @@
+.topbar,
+.bottombar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 18px;
+  color: var(--gold);
+  font-size: 8px;
+  gap: 12px;
+  position: relative;
+  z-index: 2;
+}
+
+.topbar-left,
+.topbar-right,
+.topbar-center {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.badge {
+  border: 2px solid var(--orange);
+  color: var(--orange);
+  padding: 4px 6px;
+}
+
+.brand-mark {
+  color: var(--muted);
+  letter-spacing: 1px;
+}
+
+.sys {
+  color: var(--muted);
+}
+
+.bottombar {
+  color: var(--muted);
+  border-top: 1px solid rgba(255, 158, 0, 0.2);
+  margin-top: auto;
+}
+
+.online {
+  color: var(--green);
+}
+
+.coin {
+  color: var(--gold);
+}

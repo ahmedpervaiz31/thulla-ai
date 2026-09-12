@@ -1,0 +1,147 @@
+.lobby {
+  position: relative;
+  z-index: 2;
+  max-width: 720px;
+  margin: 24px auto 40px;
+  padding: 0 16px;
+  text-align: center;
+}
+
+.title {
+  margin: 0;
+  font-size: clamp(28px, 8vw, 56px);
+  color: var(--orange);
+  text-shadow:
+    3px 3px 0 #7a3d00,
+    6px 6px 0 #3a1c00;
+  letter-spacing: 4px;
+}
+
+.subtitle {
+  color: var(--text);
+  font-size: 8px;
+  margin: 16px 0 28px;
+  opacity: 0.85;
+}
+
+.panel {
+  background: rgba(28, 16, 48, 0.92);
+  border: 3px solid var(--panel-border);
+  border-radius: 16px;
+  padding: 22px 20px 20px;
+  box-shadow: 0 0 0 1px rgba(255, 158, 0, 0.15), 0 12px 40px rgba(0, 0, 0, 0.45);
+  text-align: left;
+}
+
+.panel-title {
+  margin: 0 0 18px;
+  text-align: center;
+  color: var(--gold);
+  font-size: 11px;
+}
+
+.mode-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.mode-btn {
+  font-family: inherit;
+  font-size: 9px;
+  color: var(--muted);
+  background: #1a1030;
+  border: 3px solid #3a2a58;
+  border-radius: 10px;
+  padding: 14px 10px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+
+.mode-btn.selected {
+  border-color: var(--orange);
+  color: var(--text);
+  background: #2a1848;
+  box-shadow: 0 0 0 1px var(--orange);
+}
+
+.mode-icon {
+  font-size: 22px;
+}
+
+.mode-name {
+  color: inherit;
+}
+
+.mode-sub {
+  font-size: 7px;
+  color: var(--muted);
+}
+
+.players-block {
+  margin-top: 22px;
+}
+
+.players-head {
+  display: flex;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 8px;
+  margin-bottom: 10px;
+}
+
+.players-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.p-btn {
+  flex: 1;
+  min-width: 48px;
+  background: #1a1030;
+  color: var(--muted);
+  border: 2px solid #3a2a58;
+  border-radius: 6px;
+  padding: 10px 6px;
+  font-size: 10px;
+}
+
+.p-btn.selected {
+  background: var(--orange);
+  border-color: var(--orange);
+  color: #1a1020;
+}
+
+.players-note {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 7px;
+}
+
+.start-btn {
+  width: 100%;
+  margin-top: 20px;
+  background: var(--orange);
+  color: #1a1020;
+  border: none;
+  border-radius: 8px;
+  padding: 16px 12px;
+  font-size: 11px;
+  box-shadow: 0 4px 0 var(--orange-dark);
+}
+
+.start-btn:active {
+  transform: translateY(2px);
+  box-shadow: 0 2px 0 var(--orange-dark);
+}
+
+@media (max-width: 720px) {
+  .mode-row {
+    grid-template-columns: 1fr;
+  }
+}

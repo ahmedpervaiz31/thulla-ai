@@ -1,0 +1,99 @@
+@keyframes dealIn {
+  from {
+    transform: translateY(-18px) scale(0.75);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+.playing-card {
+  width: 58px;
+  height: 82px;
+  border-radius: 6px;
+  background: var(--card-face);
+  color: var(--card-ink);
+  border: 2px solid #2a2030;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  cursor: default;
+  user-select: none;
+  position: relative;
+  box-shadow: 0 4px 0 #0006;
+  transition: transform 0.12s, border-color 0.12s;
+}
+
+.playing-card.small {
+  width: 46px;
+  height: 64px;
+  font-size: 8px;
+}
+
+.playing-card .rank {
+  font-size: 11px;
+}
+
+.playing-card .suit {
+  font-size: 16px;
+}
+
+.playing-card.red {
+  color: var(--heart);
+}
+
+.playing-card.black {
+  color: var(--spade);
+}
+
+.playing-card.legal {
+  cursor: pointer;
+  border-color: var(--green);
+}
+
+.playing-card.legal:hover,
+.playing-card.selected {
+  transform: translateY(-10px);
+  border-color: var(--orange);
+  box-shadow: 0 8px 0 #0006, 0 0 10px rgba(255, 158, 0, 0.4);
+}
+
+.playing-card .tag {
+  position: absolute;
+  top: -8px;
+  right: -6px;
+  background: var(--green);
+  color: #062014;
+  font-size: 6px;
+  padding: 2px 4px;
+  border-radius: 2px;
+}
+
+.playing-card.dim {
+  opacity: 0.4;
+}
+
+.playing-card.deal-in {
+  animation: dealIn 0.4s ease-out;
+}
+
+.card-back {
+  width: 18px;
+  height: 26px;
+  border-radius: 2px;
+  background: linear-gradient(135deg, #5b2d91, #2a1048);
+  border: 1px solid #ff9e00aa;
+  flex-shrink: 0;
+}
+
+.card-back.stacked {
+  margin-left: -10px;
+}
+
+.card-back.stacked:first-child {
+  margin-left: 0;
+}

@@ -1,0 +1,88 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #050308;
+  color: var(--text);
+  font-family: "Press Start 2P", monospace;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.hidden {
+  display: none !important;
+}
+
+.crt {
+  position: relative;
+  height: 100vh;
+  max-height: 100vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background:
+    linear-gradient(180deg, rgba(255, 158, 0, 0.04), transparent 30%),
+    repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 3px,
+      rgba(0, 0, 0, 0.12) 3px,
+      rgba(0, 0, 0, 0.12) 4px
+    ),
+    linear-gradient(90deg, rgba(120, 80, 200, 0.08) 1px, transparent 1px),
+    linear-gradient(rgba(120, 80, 200, 0.08) 1px, transparent 1px),
+    radial-gradient(ellipse at center, #2a1848 0%, var(--bg) 70%);
+  background-size: auto, auto, 28px 28px, 28px 28px, auto;
+  box-shadow: inset 0 0 80px rgba(0, 0, 0, 0.65);
+}
+
+/* Game table: drop arcade footer so the table fits without page scroll. */
+.crt.on-table .bottombar {
+  display: none;
+}
+
+.scanlines {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.025),
+    rgba(255, 255, 255, 0.025) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+  z-index: 50;
+  mix-blend-mode: overlay;
+}
+
+.vignette {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  box-shadow: inset 0 0 120px 40px rgba(0, 0, 0, 0.55);
+  z-index: 49;
+}
+
+#page-root {
+  position: relative;
+  z-index: 2;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.p-btn,
+.chip,
+.play-btn,
+.start-btn,
+.action-btn {
+  font-family: inherit;
+  cursor: pointer;
+}

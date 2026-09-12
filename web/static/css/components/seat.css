@@ -1,0 +1,134 @@
+.seat {
+  min-height: 0;
+  max-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Never show scrollbars — clip/scale instead (human hand shrinks arena). */
+  overflow: hidden;
+}
+
+.seat-top {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.seat-left {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.seat-right {
+  grid-column: 3;
+  grid-row: 2;
+}
+
+.seat-bottom {
+  grid-column: 2;
+  grid-row: 3;
+}
+
+.seat-stack {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: center;
+  max-width: 100%;
+  max-height: 100%;
+}
+
+.seat-stack.col {
+  flex-direction: column;
+}
+
+.seat-stack.row {
+  flex-direction: row;
+  flex-wrap: wrap;
+}
+
+.seat-card {
+  background: rgba(20, 12, 36, 0.9);
+  border: 2px solid #3a2a58;
+  border-radius: 10px;
+  padding: 10px;
+  width: 150px;
+  height: 108px;
+  text-align: center;
+  overflow: hidden;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.seat-card.turn {
+  border-color: var(--orange);
+  box-shadow: 0 0 12px rgba(255, 158, 0, 0.35);
+}
+
+.seat-card.out {
+  opacity: 0.45;
+}
+
+.seat-name {
+  color: var(--gold);
+  font-size: 8px;
+  margin-bottom: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  line-height: 1.3;
+}
+
+.seat-meta {
+  color: var(--muted);
+  font-size: 7px;
+  min-height: 12px;
+}
+
+.turn-tag {
+  display: inline-block;
+  margin-top: 4px;
+  background: var(--orange);
+  color: #1a1020;
+  padding: 3px 6px;
+  font-size: 7px;
+  min-height: 16px;
+  line-height: 10px;
+  visibility: hidden;
+}
+
+.seat-card.turn .turn-tag {
+  visibility: visible;
+}
+
+.backs {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 6px;
+  height: 28px;
+  width: 100%;
+  flex-shrink: 0;
+}
+
+/* Human vs AI: scale stacked side seats so they fit without scrollbars. */
+.table.human-mode .seat-stack.many {
+  gap: 6px;
+  transform-origin: center center;
+}
+
+.table.human-mode .seat-stack.many.col {
+  transform: scale(0.92);
+}
+
+.table.human-mode .seat-stack.crowded.col {
+  transform: scale(0.78);
+  gap: 4px;
+}
+
+.table.human-mode .seat-stack.crowded .backs {
+  display: none;
+}

@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>THULLA - Arcade Cardroom</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/css/main.css" />
+</head>
+<body>
+  <div class="crt" id="app">
+    <div class="scanlines" aria-hidden="true"></div>
+    <div class="vignette" aria-hidden="true"></div>
+
+    <header class="topbar">
+      <div class="topbar-left">
+        <span class="hi">HI-SCORE <span data-role="hi-score">000000</span></span>
+        <span class="badge" data-role="mode-badge">LOBBY</span>
+      </div>
+      <div class="topbar-center">
+        <span class="brand-mark">ARCADE CARDROOM</span>
+      </div>
+      <div class="topbar-right">
+        <span data-role="trick-label">—</span>
+        <span class="sys">SYSTEM READY</span>
+      </div>
+    </header>
+
+    <div id="page-root"></div>
+
+    <footer class="bottombar" data-role="chrome-footer">
+      <span class="online">● ONLINE</span>
+      <span class="coin">★ INSERT COIN TO JOIN ★</span>
+      <span class="copy">© THULLA</span>
+    </footer>
+  </div>
+  <script type="module" src="/static/js/main.js"></script>
+</body>
+</html>

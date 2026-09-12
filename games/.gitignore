@@ -1,0 +1,4 @@
+# Keep folder structure; ignore saved game JSON logs.
+**/*.json
+!.gitkeep
+**/.gitkeep

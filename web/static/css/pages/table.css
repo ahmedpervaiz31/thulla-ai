@@ -1,0 +1,123 @@
+.table {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  min-height: calc(100vh - 52px);
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  transition: padding-right 0.22s ease, padding-left 0.22s ease;
+}
+
+.table.scratch-open {
+  padding-right: 300px;
+}
+
+.table.ideal-open {
+  padding-left: 240px;
+}
+
+.table-shell {
+  max-width: 1100px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 8px 12px 120px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: calc(100vh - 52px);
+}
+
+.arena {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) minmax(260px, 1.5fr) minmax(160px, 1fr);
+  grid-template-rows: minmax(120px, auto) minmax(200px, 1fr) minmax(120px, auto);
+  gap: 8px;
+  flex: 1 1 auto;
+  min-height: 320px;
+  max-height: calc(100vh - 260px);
+  align-items: stretch;
+  overflow: hidden;
+}
+
+.table.ai-mode .arena {
+  max-height: calc(100vh - 100px);
+  height: min(72vh, 580px);
+}
+
+.table.ai-mode .hand-zone {
+  display: none;
+}
+
+.arena.human-table {
+  grid-template-rows: minmax(100px, auto) minmax(200px, 1fr) 0;
+  max-height: calc(100vh - 280px);
+}
+
+.arena.human-table .seat-bottom {
+  visibility: hidden;
+  pointer-events: none;
+  height: 0;
+  overflow: hidden;
+}
+
+@media (max-width: 720px) {
+  .arena {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto;
+    height: auto;
+    max-height: none;
+    min-height: 0;
+    overflow: visible;
+  }
+
+  .seat-top,
+  .seat-left,
+  .seat-right,
+  .seat-bottom,
+  .center-zone {
+    grid-column: 1;
+    grid-row: auto;
+    justify-self: center;
+    max-height: none;
+  }
+
+  .arena.human-table {
+    grid-template-rows: auto;
+  }
+
+  .arena.human-table .seat-bottom {
+    display: none;
+  }
+
+  .seat-card {
+    width: min(100%, 160px);
+  }
+
+  .hand-zone {
+    height: auto;
+  }
+
+  .table.ai-mode .hand-zone {
+    display: none;
+  }
+
+  .controls {
+    grid-template-columns: 1fr;
+    bottom: 0;
+  }
+
+  .ctrl-left,
+  .ctrl-center,
+  .ctrl-right {
+    justify-content: center;
+  }
+
+  .status {
+    width: auto;
+    text-align: center;
+  }
+}

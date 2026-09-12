@@ -1,5 +1,6 @@
 NUMBER_CARDS = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"]
 COLOUR_CARDS = ["Diamond", "Heart", "Spade", "Club"]
+SUIT_LETTER = {"Diamond": "D", "Heart": "H", "Spade": "S", "Club": "C"}
 
 _COLOUR_ALIASES = {}
 for _name in COLOUR_CARDS:
@@ -13,8 +14,14 @@ class Card:
         self.number = number
         self.colour = colour
 
+    def code(self):
+        return f"{self.number}{SUIT_LETTER[self.colour]}"
+
+    def __str__(self):
+        return self.code()
+
     def __repr__(self):
-        return f"{self.number} \t {self.colour}s"
+        return self.code()
 
     def __eq__(self, other):
         return isinstance(other, Card) and self.number == other.number and self.colour == other.colour
@@ -52,6 +59,23 @@ def valid_moves(hand, expected_cards):
         return list(hand)
     common = [card for card in hand if card in expected_cards]
     return common if common else list(hand)
+
+
+def format_cards(cards):
+    return " ".join(card.code() for card in cards)
+
+
+def format_hand(cards):
+    """One line per suit, e.g. Heart  2 6 7 9"""
+    by_suit = {colour: [] for colour in COLOUR_CARDS}
+    for card in cards:
+        by_suit[card.colour].append(card.number)
+    lines = []
+    for colour in COLOUR_CARDS:
+        ranks = by_suit[colour]
+        if ranks:
+            lines.append(f"  {colour:<8} {' '.join(ranks)}")
+    return "\n".join(lines) if lines else "  (empty)"
 
 
 def create_deck():

@@ -14,7 +14,8 @@ def C(number, colour):
 
 class ParseCardTests(unittest.TestCase):
     def test_compact_and_words(self):
-        self.assertEqual(parse_card("AH"), C("A", "Heart"))
+        self.assertEqual(parse_card("AH").code(), "AH")
+        self.assertEqual(str(C("10", "Spade")), "10S")
         self.assertEqual(parse_card("10S"), C("10", "Spade"))
         self.assertEqual(parse_card("Q hearts"), C("Q", "Heart"))
         self.assertEqual(parse_card("kd"), C("K", "Diamond"))
@@ -145,6 +146,25 @@ class NeighborTakeTests(unittest.TestCase):
         self.assertEqual(p1.hand, [])
         self.assertEqual(game.active_player_indices, [0, 2])
         self.assertEqual(game.next_active(0), 2)
+
+    def test_victim_can_refuse_give(self):
+        p0 = ScriptedPlayer("P0", take_decisions=[True])
+        p1 = ScriptedPlayer("P1", give_decisions=[False])
+        p2 = ScriptedPlayer("P2")
+        game = ThullaGame([p0, p1, p2], verbose=False)
+        game.set_hands(
+            [
+                [C("A", "Heart"), C("2", "Club")],
+                [C("3", "Spade"), C("4", "Diamond")],
+                [C("5", "Club"), C("6", "Club")],
+            ]
+        )
+        leader = game.take_phase(0)
+        self.assertEqual(leader, 0)
+        self.assertEqual(game.winners, [])
+        self.assertEqual(len(p0.hand), 2)
+        self.assertEqual(len(p1.hand), 2)
+        self.assertEqual(game.active_player_indices, [0, 1, 2])
 
 
 class PlayerCountTests(unittest.TestCase):

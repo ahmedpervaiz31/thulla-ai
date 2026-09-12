@@ -24,9 +24,9 @@ def parse_player_count(argv=None):
 
 
 def build_players(player_cnt):
-    players = [HumanPlayer("Player 0 (You)")]
+    players = [HumanPlayer("You")]
     for i in range(1, player_cnt):
-        players.append(ComputerPlayer(f"Player {i} (CPU)"))
+        players.append(ComputerPlayer(f"CPU{i}"))
     return players
 
 

@@ -1,0 +1,58 @@
+.take-modal,
+.finish-modal {
+  position: fixed;
+  left: 50%;
+  top: 45%;
+  transform: translate(-50%, -50%);
+  z-index: 45;
+  background: #1c1030;
+  border: 3px solid var(--orange);
+  border-radius: 12px;
+  padding: 20px;
+  min-width: min(90vw, 360px);
+  text-align: center;
+  box-shadow: 0 0 40px rgba(0, 0, 0, 0.6);
+}
+
+.take-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.action-btn {
+  flex: 1;
+  border: none;
+  border-radius: 8px;
+  padding: 12px 8px;
+  font-size: 9px;
+}
+
+.action-btn.yes {
+  background: var(--orange);
+  color: #1a1020;
+}
+
+.action-btn.no {
+  background: #3a2a58;
+  color: var(--text);
+}
+
+.finish-modal h2 {
+  color: var(--orange);
+  margin: 0 0 12px;
+}
+
+.finish-modal ol {
+  text-align: left;
+  color: var(--gold);
+  font-size: 9px;
+  padding-left: 22px;
+}
+
+.finish-modal li.loser {
+  color: var(--red);
+  list-style: none;
+  margin-left: -22px;
+  margin-top: 8px;
+}

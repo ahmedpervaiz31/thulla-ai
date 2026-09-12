@@ -1,0 +1,105 @@
+.hand-zone {
+  margin-top: 12px;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  height: auto;
+  flex-shrink: 0;
+  overflow: visible;
+  padding: 8px 8px 4px;
+}
+
+.you-rail {
+  width: min(100%, 920px);
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  box-sizing: border-box;
+  padding: 10px 12px 12px;
+  background: rgba(20, 12, 36, 0.95);
+  border: 2px solid #3a2a58;
+  border-radius: 12px;
+  transition: width 0.28s ease;
+  will-change: width;
+  overflow: visible;
+}
+
+.you-rail.turn {
+  border-color: var(--orange);
+  box-shadow: 0 0 12px rgba(255, 158, 0, 0.35);
+}
+
+.you-rail.out {
+  opacity: 0.45;
+}
+
+.you-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 14px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 2px 8px 6px;
+  min-height: 24px;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+}
+
+.you-bar-name {
+  color: var(--gold);
+  font-size: 10px;
+  letter-spacing: 1px;
+}
+
+.you-bar-meta {
+  color: var(--muted);
+  font-size: 8px;
+  margin-left: 0;
+}
+
+.you-bar-turn {
+  background: var(--orange);
+  color: #1a1020;
+  padding: 4px 8px;
+  font-size: 7px;
+  visibility: hidden;
+}
+
+.you-rail.turn .you-bar-turn {
+  visibility: visible;
+}
+
+.hand {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 8px;
+  justify-content: center;
+  align-items: flex-end;
+  width: 100%;
+  /* Room for LEGAL tag + selected lift without scroll/clip */
+  padding-top: 14px;
+  overflow: visible;
+}
+
+.hand .playing-card {
+  flex: 0 0 auto;
+}
+
+.hand .playing-card .rank {
+  font-size: 16px;
+}
+
+.hand .playing-card .suit {
+  font-size: 22px;
+}
+
+.hand .playing-card .tag {
+  font-size: 7px;
+  top: -10px;
+  right: -8px;
+}

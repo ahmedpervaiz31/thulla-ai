@@ -1,0 +1,285 @@
+/* Right-edge public-intel scratch pad */
+
+.table {
+  --scratch-w: 0px;
+  --scratch-handle: 28px;
+}
+
+.scratch-pad {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  pointer-events: none;
+  /* Topbar stays visible above the pad chrome */
+  padding-top: 44px;
+}
+
+.scratch-handle {
+  pointer-events: auto;
+  align-self: center;
+  width: var(--scratch-handle);
+  height: 72px;
+  margin-right: 0;
+  border: 2px solid #3a2a58;
+  border-right: none;
+  border-radius: 10px 0 0 10px;
+  background: rgba(20, 12, 36, 0.96);
+  color: var(--gold);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: grab;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: -4px 0 16px rgba(0, 0, 0, 0.35);
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  touch-action: none;
+  user-select: none;
+}
+
+.scratch-handle:hover,
+.scratch-open .scratch-handle {
+  border-color: var(--orange);
+  color: var(--orange);
+}
+
+.scratch-handle:active {
+  cursor: grabbing;
+}
+
+.scratch-handle::before {
+  content: "◀";
+  display: block;
+  transition: transform 0.22s ease;
+}
+
+.scratch-open .scratch-handle::before {
+  content: "▶";
+}
+
+.scratch-panel {
+  pointer-events: auto;
+  width: 0;
+  overflow: hidden;
+  background: rgba(14, 8, 28, 0.97);
+  border-left: 2px solid transparent;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  transition: width 0.22s ease, border-color 0.22s ease;
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.45);
+}
+
+.scratch-open .scratch-panel {
+  width: 300px;
+  border-left-color: rgba(255, 158, 0, 0.35);
+}
+
+.scratch-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 14px 8px;
+  border-bottom: 1px solid rgba(255, 158, 0, 0.2);
+}
+
+.scratch-title {
+  color: var(--gold);
+  font-size: 9px;
+  letter-spacing: 1px;
+}
+
+.scratch-sub {
+  color: var(--muted);
+  font-size: 6px;
+}
+
+.scratch-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 10px 12px 100px;
+  scrollbar-width: thin;
+  scrollbar-color: #3a2a58 transparent;
+}
+
+.scratch-section {
+  margin-bottom: 16px;
+}
+
+.scratch-h {
+  margin: 0 0 8px;
+  color: var(--orange);
+  font-size: 8px;
+  letter-spacing: 1px;
+  font-weight: normal;
+}
+
+.scratch-note,
+.scratch-empty {
+  color: var(--muted);
+  font-size: 7px;
+  margin: 0;
+}
+
+.scratch-suit-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.scratch-suit-label {
+  color: var(--text);
+  font-size: 7px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.scratch-suit-label.red {
+  color: var(--heart);
+}
+
+.scratch-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.scratch-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px 5px;
+  border-radius: 4px;
+  background: var(--card-face);
+  color: var(--card-ink);
+  font-size: 8px;
+  line-height: 1;
+  border: 1px solid #2a2030;
+}
+
+.scratch-chip b {
+  font-weight: normal;
+}
+
+.scratch-chip i {
+  font-style: normal;
+  font-size: 9px;
+}
+
+.scratch-chip.red {
+  color: var(--heart);
+}
+
+.scratch-seat {
+  background: rgba(20, 12, 36, 0.9);
+  border: 2px solid #3a2a58;
+  border-radius: 10px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+}
+
+.scratch-seat.out {
+  opacity: 0.5;
+}
+
+.scratch-seat-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.scratch-seat-name {
+  color: var(--gold);
+  font-size: 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.scratch-seat-meta {
+  color: var(--muted);
+  font-size: 6px;
+  flex-shrink: 0;
+}
+
+.scratch-block {
+  margin-bottom: 6px;
+}
+
+.scratch-block:last-child {
+  margin-bottom: 0;
+}
+
+.scratch-label {
+  color: var(--muted);
+  font-size: 6px;
+  margin-bottom: 4px;
+  letter-spacing: 0.5px;
+}
+
+.scratch-voids {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.scratch-void {
+  border: 1px solid #3a2a58;
+  color: var(--text);
+  font-size: 6px;
+  padding: 3px 5px;
+  border-radius: 4px;
+  background: #1a1030;
+}
+
+.scratch-void.red {
+  color: var(--heart);
+  border-color: rgba(196, 30, 58, 0.45);
+}
+
+.scratch-gaps {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.scratch-gap {
+  color: var(--muted);
+  font-size: 6px;
+}
+
+/* Controls footer shifts with the pad so it isn't covered */
+.controls {
+  transition: right 0.22s ease;
+}
+
+.table.scratch-open .controls {
+  right: 300px;
+}
+
+@media (max-width: 720px) {
+  .table.scratch-open {
+    padding-right: min(300px, 78vw);
+  }
+
+  .scratch-open .scratch-panel {
+    width: min(300px, 78vw);
+  }
+
+  .table.scratch-open .controls {
+    right: min(300px, 78vw);
+  }
+}

@@ -1,0 +1,265 @@
+/* Left-edge ideal-move coach (human mode) */
+
+.table {
+  --ideal-w: 0px;
+  --ideal-handle: 28px;
+}
+
+.ideal-pad {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: row-reverse;
+  align-items: stretch;
+  pointer-events: none;
+  padding-top: 44px;
+}
+
+.ideal-handle {
+  pointer-events: auto;
+  align-self: center;
+  width: var(--ideal-handle);
+  height: 72px;
+  border: 2px solid #3a2a58;
+  border-left: none;
+  border-radius: 0 10px 10px 0;
+  background: rgba(20, 12, 36, 0.96);
+  color: var(--gold);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: grab;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 4px 0 16px rgba(0, 0, 0, 0.35);
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  touch-action: none;
+  user-select: none;
+}
+
+.ideal-handle:hover,
+.ideal-open .ideal-handle {
+  border-color: var(--orange);
+  color: var(--orange);
+}
+
+.ideal-handle:active {
+  cursor: grabbing;
+}
+
+.ideal-handle::before {
+  content: "▶";
+  display: block;
+}
+
+.ideal-open .ideal-handle::before {
+  content: "◀";
+}
+
+.ideal-panel {
+  pointer-events: auto;
+  width: 0;
+  overflow: hidden;
+  background: rgba(14, 8, 28, 0.97);
+  border-right: 2px solid transparent;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  transition: width 0.22s ease, border-color 0.22s ease;
+  box-shadow: 8px 0 24px rgba(0, 0, 0, 0.45);
+}
+
+.ideal-open .ideal-panel {
+  width: 240px;
+  border-right-color: rgba(255, 158, 0, 0.35);
+}
+
+.ideal-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 14px 8px;
+  border-bottom: 1px solid rgba(255, 158, 0, 0.2);
+}
+
+.ideal-title {
+  color: var(--gold);
+  font-size: 9px;
+  letter-spacing: 1px;
+}
+
+.ideal-sub {
+  color: var(--muted);
+  font-size: 6px;
+}
+
+.ideal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 10px 12px 100px;
+  scrollbar-width: thin;
+  scrollbar-color: #3a2a58 transparent;
+}
+
+.ideal-section {
+  margin-bottom: 14px;
+}
+
+.ideal-h {
+  margin: 0 0 8px;
+  color: var(--orange);
+  font-size: 8px;
+  letter-spacing: 1px;
+  font-weight: normal;
+}
+
+.ideal-note {
+  color: var(--muted);
+  font-size: 7px;
+  margin: 0;
+  line-height: 1.6;
+}
+
+.ideal-rec {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(20, 12, 36, 0.9);
+  border: 2px solid var(--orange);
+  border-radius: 10px;
+  padding: 10px;
+}
+
+.ideal-rec-text {
+  color: var(--gold);
+  font-size: 8px;
+  line-height: 1.4;
+}
+
+.ideal-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  background: var(--card-face);
+  color: var(--card-ink);
+  font-size: 9px;
+  line-height: 1;
+  border: 1px solid #2a2030;
+  flex-shrink: 0;
+}
+
+.ideal-chip b {
+  font-weight: normal;
+}
+
+.ideal-chip i {
+  font-style: normal;
+  font-size: 10px;
+}
+
+.ideal-chip.red {
+  color: var(--heart);
+}
+
+.ideal-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ideal-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 6px;
+}
+
+.ideal-line-k {
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.ideal-line-v {
+  color: var(--text);
+  text-align: right;
+  word-break: break-word;
+}
+
+.ideal-risks {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ideal-risk {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 6px;
+}
+
+.ideal-risk-suit {
+  color: var(--text);
+  min-width: 72px;
+}
+
+.ideal-risk-p {
+  color: var(--green);
+  min-width: 28px;
+}
+
+.ideal-risk-note {
+  color: var(--muted);
+}
+
+.ideal-steps {
+  margin: 0;
+  padding-left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ideal-step-label {
+  color: var(--gold);
+  font-size: 6px;
+  margin-bottom: 2px;
+  letter-spacing: 0.5px;
+}
+
+.ideal-step-detail {
+  color: var(--muted);
+  font-size: 6px;
+  line-height: 1.5;
+}
+
+.table.ideal-open .controls {
+  left: 240px;
+}
+
+.controls {
+  transition: left 0.22s ease, right 0.22s ease;
+}
+
+@media (max-width: 720px) {
+  .table.ideal-open {
+    padding-left: min(240px, 70vw);
+  }
+
+  .ideal-open .ideal-panel {
+    width: min(240px, 70vw);
+  }
+
+  .table.ideal-open .controls {
+    left: min(240px, 70vw);
+  }
+}
