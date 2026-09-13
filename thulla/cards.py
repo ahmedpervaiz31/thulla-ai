@@ -54,6 +54,48 @@ def cards_of_suit(colour):
     return [Card(num, colour) for num in NUMBER_CARDS]
 
 
+def raise_equivalence(card, hand, legal_moves, accounted=None):
+    """
+    Prefer the highest card in `card`'s equivalence class among legal moves.
+
+    Two same-suit holdings are equivalent when every rank between them is already
+    accounted for (held by us, discarded, in the trick, or known). Playing the
+    low end of such a block is a thulla blunder: an opponent who picks it up can
+    undercut the rest of the block.
+    """
+    if card is None:
+        return card
+    legal_set = set(legal_moves)
+    group = equivalence_class(card, hand, accounted=accounted)
+    raised = [c for c in group if c in legal_set]
+    return max(raised) if raised else card
+
+
+def equivalence_class(card, hand, accounted=None):
+    """Connected same-suit block containing `card` (see raise_equivalence)."""
+    suit = card.colour
+    held = sorted({c for c in hand if c.colour == suit} | {card})
+    accounted = set(accounted or []) | set(hand)
+    suit_all = cards_of_suit(suit)
+
+    groups = []
+    for c in held:
+        if not groups:
+            groups.append([c])
+            continue
+        prev = groups[-1][-1]
+        live_between = any(prev < mid < c and mid not in accounted for mid in suit_all)
+        if live_between:
+            groups.append([c])
+        else:
+            groups[-1].append(c)
+
+    for group in groups:
+        if card in group:
+            return list(group)
+    return [card]
+
+
 def valid_moves(hand, expected_cards):
     if not expected_cards:
         return list(hand)

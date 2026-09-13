@@ -81,6 +81,29 @@ class PlayHistoryInferenceTests(unittest.TestCase):
         self.assertFalse(view.unlikely_hold(1, C("4", "Spade")))
         self.assertFalse(view.unlikely_hold(1, C("A", "Spade")))
         self.assertEqual(view.cards_played_by(0), [C("9", "Spade")])
+        self.assertEqual(
+            view.duck_gap_unknowns(1, "Spade"),
+            [C("6", "Spade"), C("7", "Spade"), C("8", "Spade")],
+        )
+
+    def test_duck_gap_ignores_already_public_cards(self):
+        """A, K, Q on one trick: Q-under-A must not soft-hint K/A (already public)."""
+        info = PublicInfo(3)
+        info.hand_sizes = [5, 5, 5]
+        info.note_play(0, C("A", "Spade"), None)
+        info.note_play(1, C("K", "Spade"), "Spade")
+        info.note_play(2, C("Q", "Spade"), "Spade")
+        # Still in the trick (not discarded yet) — but publicly located.
+        self.assertEqual(info.under_ceilings[2]["Spade"], (C("Q", "Spade"), C("A", "Spade")))
+        view = info.view_for(0, [])
+        self.assertEqual(view.duck_gap_unknowns(2, "Spade"), [])
+        self.assertFalse(view.unlikely_hold(2, C("K", "Spade")))
+        self.assertFalse(view.unlikely_hold(2, C("A", "Spade")))
+        # After clean discard, still nothing live in the Q–A gap.
+        info.finish_clean(list(info.trick_cards))
+        view = info.view_for(0, [])
+        self.assertEqual(view.duck_gap_unknowns(2, "Spade"), [])
+        self.assertFalse(view.unlikely_hold(2, C("K", "Spade")))
 
     def test_take_lead_marks_suit_high(self):
         info = PublicInfo(2)
@@ -127,6 +150,46 @@ class BotPolicyTests(unittest.TestCase):
         bot.receive_cards([C("5", "Club"), C("A", "Diamond")])
         played = bot.play_turn(cards_of_suit("Heart"), view)
         self.assertEqual(played, C("5", "Club"))
+
+
+class HeadsUpCompleteInfoTests(unittest.TestCase):
+    def test_deduces_opponent_hand_from_discards_and_mine(self):
+        from thulla.cards import create_deck
+
+        info = PublicInfo(3)
+        info.active_indices = [0, 1]
+        me = [C("2", "Heart"), C("3", "Heart"), C("4", "Club")]
+        opp = [C("5", "Spade"), C("6", "Diamond")]
+        # Everything else discarded (or known empty seats).
+        rest = [
+            c
+            for c in create_deck()
+            if c not in me and c not in opp
+        ]
+        info.discarded = set(rest)
+        info.hand_sizes = [3, 2, 0]
+        view = info.view_for(0, [1])
+        deduced = view.deduced_hand(1, me)
+        self.assertEqual(deduced, set(opp))
+        self.assertEqual(view.unknown_slots(1, me), 0)
+        self.assertEqual(view.free_cards(me), [])
+        self.assertEqual(view.visible_cards(1, me), set(opp))
+
+    def test_no_deduction_with_three_active(self):
+        from thulla.cards import create_deck
+
+        info = PublicInfo(3)
+        info.active_indices = [0, 1, 2]
+        me = [C("2", "Heart")]
+        info.discarded = set(create_deck()) - set(me) - {
+            C("3", "Club"),
+            C("4", "Club"),
+            C("5", "Club"),
+        }
+        info.hand_sizes = [1, 2, 1]
+        view = info.view_for(0, [1, 2])
+        self.assertIsNone(view.deduced_hand(1, me))
+        self.assertGreater(len(view.free_cards(me)), 0)
 
 
 if __name__ == "__main__":

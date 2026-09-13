@@ -166,6 +166,24 @@ class NeighborTakeTests(unittest.TestCase):
         self.assertEqual(len(p1.hand), 2)
         self.assertEqual(game.active_player_indices, [0, 1, 2])
 
+    def test_heads_up_take_disabled(self):
+        p0 = ScriptedPlayer("P0", take_decisions=[True])
+        p1 = ScriptedPlayer("P1")
+        game = ThullaGame([p0, p1], verbose=False)
+        game.set_hands(
+            [
+                [C("A", "Heart"), C("2", "Club")],
+                [C("3", "Spade"), C("4", "Diamond")],
+            ]
+        )
+        self.assertIsNone(game.take_offer_context(0, 0))
+        leader = game.take_phase(0)
+        self.assertEqual(leader, 0)
+        self.assertEqual(game.winners, [])
+        self.assertEqual(len(p0.hand), 2)
+        self.assertEqual(len(p1.hand), 2)
+        self.assertEqual(game.active_player_indices, [0, 1])
+
 
 class PlayerCountTests(unittest.TestCase):
     def test_flag_and_bounds(self):

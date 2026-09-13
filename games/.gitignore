@@ -1,4 +1,5 @@
-# Keep folder structure; ignore saved game JSON logs.
+# Keep folder structure; ignore saved game JSON/MD logs.
 **/*.json
+**/*.md
 !.gitkeep
 **/.gitkeep

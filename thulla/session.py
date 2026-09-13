@@ -8,6 +8,7 @@ from typing import Any
 from .cards import parse_card, valid_moves
 from .game import ThullaGame, TrickState
 from .players import BasePlayer, ComputerPlayer, choose_computer_card
+from .review import compact_advice, new_review
 
 
 class InteractiveSeat(BasePlayer):
@@ -64,9 +65,15 @@ class GameSession:
         self.last_event: str | None = None
         self.status = "Starting"
         self.event_log: list[dict[str, Any]] = []
+        self.review: dict[str, Any] = new_review(mode, [p.name for p in players])
+        self._review_trick: dict[str, Any] | None = None
+        self.last_advice: dict[str, Any] | None = None
 
         if deal:
             self.game.shuffle_and_deal()
+            self.review["opening_hands"] = [
+                [c.code() for c in p.hand] for p in self.game.players
+            ]
             self.leader = self.game.ace_spades_holder_idx
             self._start_trick(first_trick=True)
         # Client paces CPU plays via /step (see trick_reveal for readable pot).
@@ -82,7 +89,138 @@ class GameSession:
             return
         self.status = f"Trick {self.game.trick_number}"
         self.pending = None
+        self._begin_review_trick()
         self._set_play_pending_or_none()
+
+    def _begin_review_trick(self):
+        assert self.trick is not None
+        self._review_trick = {
+            "n": self.game.trick_number,
+            "leader": self.game.players[self.trick.leader_idx].name,
+            "leader_seat": self.trick.leader_idx,
+            "first_trick": self.trick.first_trick,
+            "plays": [],
+        }
+
+    def _snapshot_advice_for_pending(self) -> dict[str, Any] | None:
+        """Ideal Move for the human seat when it is their decision."""
+        if self.mode != "human" or self.pending is None:
+            return None
+        seat = self.pending.get("seat")
+        if seat is None or not self.is_human(seat):
+            return None
+        if self.pending.get("type") not in ("play", "take", "give"):
+            return None
+        from .advise import advise_session
+
+        return compact_advice(advise_session(self))
+
+    def _log_play(
+        self,
+        seat: int,
+        card,
+        *,
+        hand_before: list[str],
+        legal: list[str],
+        advice: dict[str, Any] | None = None,
+    ):
+        if self._review_trick is None:
+            self._begin_review_trick()
+        assert self.trick is not None and self._review_trick is not None
+        expected = self.game.expected_for_seat(self.trick, seat)
+        hand_cards = [parse_card(c) for c in hand_before]
+        hand_cards = [c for c in hand_cards if c is not None]
+        must_follow = bool(expected) and any(c in expected for c in hand_cards)
+        if expected is None:
+            kind = "lead"
+        elif must_follow:
+            kind = "follow"
+        else:
+            kind = "thulla"
+        highest = self.trick.highest_card
+        entry: dict[str, Any] = {
+            "seat": seat,
+            "name": self.game.players[seat].name,
+            "card": card.code(),
+            "kind": kind,
+            "human": self.is_human(seat),
+            "hand_before": list(hand_before),
+            "legal": list(legal),
+            "lead_suit": self.trick.colour,
+            "current_highest": highest.code() if highest else None,
+        }
+        if advice:
+            entry["advice"] = advice
+            rec = advice.get("recommended") or {}
+            if isinstance(rec, dict) and rec.get("card"):
+                entry["followed_advice"] = rec["card"] == card.code()
+        self._review_trick["plays"].append(entry)
+
+    def _finalize_review_trick(self):
+        if self._review_trick is None or self.trick is None:
+            return
+        pot = [c.code() for c in self.trick.stack]
+        self._review_trick["pot"] = pot
+        if self.trick.result == "thulla":
+            self._review_trick["result"] = "thulla"
+            self._review_trick["victim"] = self.game.players[self.trick.highest_idx].name
+            self._review_trick["victim_seat"] = self.trick.highest_idx
+        else:
+            self._review_trick["result"] = "win"
+            self._review_trick["winner"] = self.game.players[self.trick.highest_idx].name
+            self._review_trick["winner_seat"] = self.trick.highest_idx
+        self.review.setdefault("tricks", []).append(self._review_trick)
+        self._review_trick = None
+
+    def _log_take(
+        self,
+        asker: int,
+        target: int,
+        given: bool,
+        n_cards: int,
+        *,
+        advice: dict[str, Any] | None = None,
+        human_decision: str | None = None,
+    ):
+        entry: dict[str, Any] = {
+            "after_trick": self.game.trick_number,
+            "asker": self.game.players[asker].name,
+            "asker_seat": asker,
+            "target": self.game.players[target].name,
+            "target_seat": target,
+            "n_cards": n_cards,
+            "given": given,
+        }
+        if human_decision:
+            entry["human_decision"] = human_decision
+        if advice:
+            entry["advice"] = advice
+            rec = advice.get("recommended") or {}
+            if isinstance(rec, dict) and "accept" in rec:
+                if human_decision == "ask":
+                    entry["followed_advice"] = bool(rec["accept"]) is True
+                elif human_decision == "decline_ask":
+                    entry["followed_advice"] = bool(rec["accept"]) is False
+                elif human_decision == "give":
+                    entry["followed_advice"] = bool(rec["accept"]) is True
+                elif human_decision == "refuse":
+                    entry["followed_advice"] = bool(rec["accept"]) is False
+        self.review.setdefault("takes", []).append(entry)
+
+    def record_advice_request(self, advice: dict[str, Any]):
+        """Persist an Ideal Move fetch (human mode coach panel)."""
+        compact = compact_advice(advice)
+        self.last_advice = compact
+        if compact is None:
+            return
+        self.review.setdefault("advice_requests", []).append(
+            {
+                "trick_number": self.game.trick_number,
+                "phase": self.phase,
+                "pending": (self.pending or {}).get("type"),
+                "advice": compact,
+            }
+        )
 
     def _set_play_pending_or_none(self):
         if self.trick is None or self.trick.done:
@@ -105,6 +243,7 @@ class GameSession:
     def _enter_trick_reveal(self):
         """Keep the finished pot visible until the client steps past it."""
         assert self.trick is not None and self.trick.done
+        self._finalize_review_trick()
         if self.trick.result == "thulla":
             victim = self.game.players[self.trick.highest_idx].name
             self.last_event = f"THULLA! {victim} picks up the pot"
@@ -136,11 +275,15 @@ class GameSession:
         self._begin_take_pass()
 
     def _begin_take_pass(self):
-        self.phase = "take"
         self.leader = self.game.ensure_leader_active(self.leader)
         if self.leader is None or len(self.game.active_player_indices) <= 1:
             self._finish_game()
             return
+        # Heads-up: skip neighbor-take prompts; continue playing.
+        if len(self.game.active_player_indices) <= 2:
+            self._start_trick(first_trick=False)
+            return
+        self.phase = "take"
         self.take_leader = self.leader
         self.take_queue = list(self.game.active_in_order(self.leader))
         self.status = f"Take phase (lead {self.game.players[self.leader].name})"
@@ -193,14 +336,17 @@ class GameSession:
             raise RuntimeError("cannot auto-play interactive seat")
         expected = self.game.expected_for_seat(self.trick, seat)
         view = self.game.view_for_seat(self.trick, seat)
+        hand_before = [c.code() for c in player.hand]
+        legal = [c.code() for c in valid_moves(player.hand, expected)]
         if isinstance(player, ComputerPlayer):
             moves = valid_moves(player.hand, expected)
             card = choose_computer_card(
                 player.hand, moves, expected, view, samples=player.mc_samples
             )
         else:
-            # ScriptedPlayer / RandomPlayer: play_turn removes the card
+            # ScriptedPlayer / RandomPlayer: play_turn may already remove the card
             card = player.play_turn(expected, view)
+        self._log_play(seat, card, hand_before=hand_before, legal=legal)
         return self.game.apply_play(self.trick, seat, card)
 
     def _decide_cpu_take(self, seat: int) -> bool:
@@ -313,6 +459,13 @@ class GameSession:
             raise ValueError(f"illegal card {card.code()}; legal: {self.pending['legal']}")
 
         assert self.trick is not None
+        hand_before = [c.code() for c in self.game.players[seat].hand]
+        legal = list(self.pending["legal"])
+        advice = self._snapshot_advice_for_pending()
+        self.last_advice = advice
+        self._log_play(
+            seat, card, hand_before=hand_before, legal=legal, advice=advice
+        )
         result = self.game.apply_play(self.trick, seat, card)
         if result != "continue":
             self._enter_trick_reveal()
@@ -327,7 +480,14 @@ class GameSession:
         seat = self.pending["seat"]
         if not self.is_human(seat):
             raise RuntimeError("not human's turn to take")
-        self._resolve_take_ask(seat, accept)
+        advice = self._snapshot_advice_for_pending()
+        self.last_advice = advice
+        self._resolve_take_ask(
+            seat,
+            accept,
+            advice=advice,
+            human_decision="ask" if accept else "decline_ask",
+        )
         return self.to_dict()
 
     def answer_give(self, accept: bool) -> dict:
@@ -336,12 +496,36 @@ class GameSession:
         seat = self.pending["seat"]
         if not self.is_human(seat):
             raise RuntimeError("not human's turn to give")
-        self._resolve_give(seat, accept)
+        advice = self._snapshot_advice_for_pending()
+        self.last_advice = advice
+        self._resolve_give(
+            seat,
+            accept,
+            advice=advice,
+            human_decision="give" if accept else "refuse",
+        )
         return self.to_dict()
 
-    def _resolve_take_ask(self, seat: int, accept: bool):
+    def _resolve_take_ask(
+        self,
+        seat: int,
+        accept: bool,
+        *,
+        advice: dict[str, Any] | None = None,
+        human_decision: str | None = None,
+    ):
         """Asker chose whether to request neighbor's cards."""
         if not accept:
+            target = self.pending["target"]
+            n_cards = self.pending["n_cards"]
+            self._log_take(
+                seat,
+                target,
+                False,
+                n_cards,
+                advice=advice,
+                human_decision=human_decision,
+            )
             self._pop_take_seat(seat)
             self.pending = None
             if len(self.game.active_player_indices) <= 1:
@@ -368,9 +552,22 @@ class GameSession:
                 asker_idx=seat,
             )
         )
-        self._complete_take(seat, target, gives)
+        self._complete_take(
+            seat,
+            target,
+            gives,
+            advice=advice,
+            human_decision=human_decision,
+        )
 
-    def _resolve_give(self, seat: int, accept: bool):
+    def _resolve_give(
+        self,
+        seat: int,
+        accept: bool,
+        *,
+        advice: dict[str, Any] | None = None,
+        human_decision: str | None = None,
+    ):
         """Victim chose whether to hand over cards."""
         asker = self.pending["asker"]
         if not accept:
@@ -378,11 +575,25 @@ class GameSession:
                 f"{self.game.players[seat].name} refuses "
                 f"{self.game.players[asker].name}"
             )
-        self._complete_take(asker, seat, accept)
+        self._complete_take(
+            asker,
+            seat,
+            accept,
+            advice=advice,
+            human_decision=human_decision,
+        )
 
-    def _complete_take(self, asker: int, target: int, given: bool):
+    def _complete_take(
+        self,
+        asker: int,
+        target: int,
+        given: bool,
+        *,
+        advice: dict[str, Any] | None = None,
+        human_decision: str | None = None,
+    ):
+        n = len(self.game.players[target].hand)
         if given:
-            n = len(self.game.players[target].hand)
             self.last_event = (
                 f"{self.game.players[asker].name} takes "
                 f"{self.game.players[target].name}'s {n} cards"
@@ -396,6 +607,14 @@ class GameSession:
                 )
             self.game.apply_take(self.take_leader, asker, False)
 
+        self._log_take(
+            asker,
+            target,
+            given,
+            n,
+            advice=advice,
+            human_decision=human_decision,
+        )
         self._pop_take_seat(asker)
         self.pending = None
         if len(self.game.active_player_indices) <= 1:
@@ -451,6 +670,27 @@ class GameSession:
         # Lazy import: persist imports GameSession.
         from .persist import info_to_dict
 
+        public = info_to_dict(g.info)
+        # Viewer-relative heads-up deduction for the human scratch pad / bots
+        # already use PlayerView.deduced_hand — do not write into shared PublicInfo.
+        if self.human_seat is not None:
+            g.info.sync_hands(g.players)
+            remaining = [p for p in g.active_player_indices if p != self.human_seat]
+            view = g.info.view_for(self.human_seat, remaining)
+            my_hand = g.players[self.human_seat].hand
+            deduced_seats = []
+            for p in view.active_indices:
+                if p == self.human_seat:
+                    continue
+                full = view.deduced_hand(p, my_hand)
+                if full is None:
+                    continue
+                public["known_holdings"][str(p)] = sorted(c.code() for c in full)
+                deduced_seats.append(p)
+            if deduced_seats:
+                public["complete_info"] = True
+                public["deduced_seats"] = deduced_seats
+
         return {
             "id": self.id,
             "mode": self.mode,
@@ -472,7 +712,7 @@ class GameSession:
             "loser": loser,
             "last_event": self.last_event,
             "finished": self.phase == "finished",
-            "public_info": info_to_dict(g.info),
+            "public_info": public,
         }
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import time
 from pathlib import Path
 from typing import Any
@@ -11,25 +12,34 @@ from .cards import Card, parse_card
 from .game import TrickState
 from .info import PublicInfo
 from .players import ComputerPlayer
+from .review import completed_markdown, completed_payload, new_review
 from .session import GameSession, InteractiveSeat, SESSIONS
 
-# Repo root / games / {human_vs_ai|ai_vs_ai} / {game_id}.json
+# games/ongoing|completed/{human_vs_ai|ai_vs_ai}/{game_id}.json
 GAMES_ROOT = Path(__file__).resolve().parent.parent / "games"
 MODE_DIRS = {
     "human": "human_vs_ai",
     "ai": "ai_vs_ai",
 }
+BUCKETS = ("ongoing", "completed")
 
 
-def mode_dir(mode: str) -> Path:
-    name = MODE_DIRS.get(mode, mode)
-    path = GAMES_ROOT / name
+def mode_name(mode: str) -> str:
+    return MODE_DIRS.get(mode, mode)
+
+
+def mode_dir(mode: str, bucket: str = "ongoing") -> Path:
+    path = GAMES_ROOT / bucket / mode_name(mode)
     path.mkdir(parents=True, exist_ok=True)
     return path
 
 
-def game_path(mode: str, game_id: str) -> Path:
-    return mode_dir(mode) / f"{game_id}.json"
+def game_path(mode: str, game_id: str, bucket: str = "ongoing") -> Path:
+    return mode_dir(mode, bucket) / f"{game_id}.json"
+
+
+def completed_md_path(mode: str, game_id: str) -> Path:
+    return mode_dir(mode, "completed") / f"{game_id}.md"
 
 
 def _card_code(card: Card | None) -> str | None:
@@ -182,6 +192,7 @@ def trick_from_dict(data: dict[str, Any] | None) -> TrickState | None:
 
 
 def session_checkpoint(session: GameSession) -> dict[str, Any]:
+    """Full resume checkpoint for games/ongoing/…"""
     g = session.game
     winners = []
     for p in g.winners:
@@ -191,7 +202,7 @@ def session_checkpoint(session: GameSession) -> dict[str, Any]:
                 break
 
     return {
-        "version": 1,
+        "version": 2,
         "saved_at": time.time(),
         "id": session.id,
         "mode": session.mode,
@@ -215,15 +226,38 @@ def session_checkpoint(session: GameSession) -> dict[str, Any]:
             "names": [p.name for p in g.players],
             "info": info_to_dict(g.info),
         },
-        "client": session.to_dict(),
-        "events": list(getattr(session, "event_log", [])),
+        "review": getattr(session, "review", None),
+        "last_advice": getattr(session, "last_advice", None),
+        "review_trick": getattr(session, "_review_trick", None),
     }
 
 
 def save_session(session: GameSession) -> Path:
-    path = game_path(session.mode, session.id)
+    """Write ongoing checkpoint (resume). Finished games also get a completed export."""
+    ensure_games_layout()
+    path = game_path(session.mode, session.id, bucket="ongoing")
     payload = session_checkpoint(session)
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    if session.phase == "finished":
+        write_completed(session)
+        # Finished games stay loadable from completed/; drop ongoing copy.
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return game_path(session.mode, session.id, bucket="completed")
+    return path
+
+
+def write_completed(session: GameSession) -> Path:
+    """Analysis-first JSON + markdown under games/completed/…"""
+    ensure_games_layout()
+    payload = completed_payload(session)
+    payload["saved_at"] = time.time()
+    path = game_path(session.mode, session.id, bucket="completed")
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    md = completed_md_path(session.mode, session.id)
+    md.write_text(completed_markdown(payload), encoding="utf-8")
     return path
 
 
@@ -232,6 +266,13 @@ def load_checkpoint(path: Path) -> dict[str, Any]:
 
 
 def find_checkpoint(game_id: str) -> Path | None:
+    """Prefer ongoing resume files, then completed, then legacy flat folders."""
+    for bucket in ("ongoing", "completed"):
+        for folder in MODE_DIRS.values():
+            path = GAMES_ROOT / bucket / folder / f"{game_id}.json"
+            if path.is_file():
+                return path
+    # Legacy: games/{mode}/{id}.json
     for folder in MODE_DIRS.values():
         path = GAMES_ROOT / folder / f"{game_id}.json"
         if path.is_file():
@@ -286,41 +327,27 @@ def session_from_checkpoint(data: dict[str, Any]) -> GameSession:
         session._reveal_was_first = data["reveal_was_first"]
     if data.get("reveal_next_leader") is not None:
         session._reveal_next_leader = data["reveal_next_leader"]
+
+    review = data.get("review")
+    if review:
+        session.review = review
+    else:
+        session.review = new_review(mode, names or [p.name for p in players])
+    session._review_trick = data.get("review_trick")
+    session.last_advice = data.get("last_advice")
+    # Legacy noisy event log (ignored going forward).
     session.event_log = list(data.get("events") or [])
     return session
 
 
 def persist_and_return(session: GameSession) -> dict:
     """Save checkpoint then return client-facing state."""
-    append_event(session, "state", session.to_dict())
     try:
         save_session(session)
     except OSError:
         # Disk failures should not break play.
         pass
     return session.to_dict()
-
-
-def append_event(session: GameSession, kind: str, payload: dict | None = None):
-    if not hasattr(session, "event_log"):
-        session.event_log = []
-    entry = {"t": time.time(), "kind": kind}
-    if payload is not None:
-        # Keep log compact: status/phase/trick only for routine snapshots.
-        if kind == "state":
-            entry["phase"] = payload.get("phase")
-            entry["status"] = payload.get("status")
-            entry["trick_number"] = payload.get("trick_number")
-            entry["whose_turn"] = payload.get("whose_turn")
-            if payload.get("last_event"):
-                entry["last_event"] = payload["last_event"]
-            if payload.get("finished"):
-                entry["finished"] = True
-                entry["winners"] = payload.get("winners")
-                entry["loser"] = payload.get("loser")
-        else:
-            entry["payload"] = payload
-    session.event_log.append(entry)
 
 
 def get_or_load_session(game_id: str) -> GameSession | None:
@@ -332,8 +359,60 @@ def get_or_load_session(game_id: str) -> GameSession | None:
         return None
     try:
         data = load_checkpoint(path)
+        # Completed analysis files (version 2 without full game blob) are not resumable.
+        if "game" not in data:
+            return None
         session = session_from_checkpoint(data)
     except (OSError, KeyError, ValueError, TypeError, json.JSONDecodeError):
         return None
     SESSIONS[session.id] = session
     return session
+
+
+def ensure_games_layout() -> None:
+    for bucket in BUCKETS:
+        for folder in MODE_DIRS.values():
+            (GAMES_ROOT / bucket / folder).mkdir(parents=True, exist_ok=True)
+
+
+def migrate_legacy_games() -> dict[str, int]:
+    """Move flat games/{mode}/*.json into ongoing/ or completed/."""
+    ensure_games_layout()
+    moved = {"ongoing": 0, "completed": 0, "skipped": 0}
+    for folder in MODE_DIRS.values():
+        legacy = GAMES_ROOT / folder
+        if not legacy.is_dir():
+            continue
+        for path in legacy.glob("*.json"):
+            try:
+                data = load_checkpoint(path)
+            except (OSError, json.JSONDecodeError):
+                moved["skipped"] += 1
+                continue
+            mode = data.get("mode")
+            if mode not in MODE_DIRS:
+                # Infer from folder
+                mode = "human" if folder == "human_vs_ai" else "ai"
+            gid = data.get("id") or path.stem
+            finished = data.get("phase") == "finished" or bool(
+                (data.get("client") or {}).get("finished")
+            )
+            bucket = "completed" if finished else "ongoing"
+            dest = game_path(mode, gid, bucket=bucket)
+            if dest.exists():
+                moved["skipped"] += 1
+                continue
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            if bucket == "completed" and "game" in data:
+                # Re-export analysis format when we still have a full checkpoint.
+                try:
+                    session = session_from_checkpoint(data)
+                    write_completed(session)
+                    path.unlink(missing_ok=True)
+                    moved["completed"] += 1
+                    continue
+                except (KeyError, ValueError, TypeError):
+                    pass
+            shutil.move(str(path), str(dest))
+            moved[bucket] += 1
+    return moved

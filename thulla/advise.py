@@ -10,15 +10,25 @@ from .players import (
     LOOKAHEAD_MAX_UNKNOWN,
     LOOKAHEAD_SAMPLES,
     THULLA_P_THRESHOLD,
+    _play_equiv,
     should_cpu_take,
 )
 from .prob import (
-    _liability_score,
+    TAKE_MARGIN,
+    TAKE_MARGIN_SAFE_FACE,
+    TAKE_UNKNOWN_MAX,
     case_a_should_take,
     compare_take_lose_rates,
     count_free_unknown,
+    dump_tier,
+    dump_value,
     estimate_lead_lose_rates,
     estimate_thulla_prob,
+    follow_take_safe,
+    has_dump_safe_face_lead,
+    is_face,
+    is_keeper,
+    suit_dump_safe,
 )
 
 
@@ -133,11 +143,17 @@ def _lead(hand, moves, view, samples):
     suit_risks = []
     for suit in by_suit:
         p = suit_p(suit)
-        note = (
-            "someone after you is void"
-            if p >= 1.0 and any(view.is_void(x, suit) for x in seats)
-            else ("safe" if p < THULLA_P_THRESHOLD else "risky")
+        safe = suit_dump_safe(
+            view, hand, suit, seats, p_thulla=p, threshold=THULLA_P_THRESHOLD
         )
+        if p >= 1.0 and any(view.is_void(x, suit) for x in seats):
+            note = "someone after you is void"
+        elif safe:
+            note = "lead dump-safe"
+        elif p < THULLA_P_THRESHOLD:
+            note = "risky shape/discards"
+        else:
+            note = "risky"
         suit_risks.append(
             {
                 "suit": suit,
@@ -159,26 +175,65 @@ def _lead(hand, moves, view, samples):
             }
         )
 
-    def suit_key(s):
-        p = suit_p(s)
-        if p < THULLA_P_THRESHOLD:
-            best_liab = max(_liability_score(c) for c in by_suit[s])
-            return (round(p, 1), -best_liab, min(by_suit[s]))
-        return (p, 0, min(by_suit[s]))
-
-    best_suit = min(candidates, key=suit_key)
-    p = suit_p(best_suit)
-    cards = by_suit[best_suit]
-
-    if p >= THULLA_P_THRESHOLD:
-        choice = min(cards)
-        card_rule = "high thulla risk → lead low"
-    else:
-        choice = max(cards, key=lambda c: (_liability_score(c), c))
-        liab = _liability_score(choice)
-        card_rule = (
-            "safe suit → dump A/K liability" if liab else "safe suit → high card"
+    safe_suits = [
+        s
+        for s in candidates
+        if suit_dump_safe(
+            view, hand, s, seats, p_thulla=suit_p(s), threshold=THULLA_P_THRESHOLD
         )
+    ]
+
+    def best_in_suit(s):
+        return max(by_suit[s], key=lambda c: (dump_tier(c), dump_value(c), c))
+
+    def low_in_suit(s):
+        cards = by_suit[s]
+        non_keepers = [c for c in cards if not is_keeper(c)]
+        pool = non_keepers if non_keepers else cards
+        return min(pool)
+
+    high_tier = [c for c in moves if dump_tier(c) >= 1]
+
+    if safe_suits:
+        def suit_key(s):
+            best = best_in_suit(s)
+            return (-dump_tier(best), len(by_suit[s]), -dump_value(best))
+
+        best_suit = min(safe_suits, key=suit_key)
+        choice = best_in_suit(best_suit)
+        card_rule = (
+            f"lead dump-safe → tier/short ({choice.code()}, "
+            f"tier {dump_tier(choice)}, len {len(by_suit[best_suit])})"
+        )
+    else:
+        def risk_key(s):
+            return (suit_p(s), len(by_suit[s]), min(by_suit[s]))
+
+        best_suit = min(candidates, key=risk_key)
+        p = suit_p(best_suit)
+        if p >= THULLA_P_THRESHOLD:
+            raw = low_in_suit(best_suit)
+            choice = _play_equiv(raw, hand, moves, view)
+            card_rule = (
+                "high thulla risk → lead low (prefer non-keeper)"
+                if choice == raw
+                else f"high thulla risk → equiv-raise {raw.code()}→{choice.code()}"
+            )
+        else:
+            choice = best_in_suit(best_suit)
+            card_rule = "no lead dump-safe suit → best available dump"
+
+    if high_tier and dump_tier(choice) == 0:
+        safe_high = [c for c in high_tier if c.colour in safe_suits]
+        pool = safe_high if safe_high else high_tier
+        choice = max(
+            pool,
+            key=lambda c: (dump_tier(c), -len(by_suit[c.colour]), dump_value(c), c),
+        )
+        card_rule = f"block keeper lead → {choice.code()}"
+
+    choice = _play_equiv(choice, hand, moves, view)
+    p = suit_p(best_suit)
 
     steps.append(
         {"label": "SUIT PICK", "detail": f"{best_suit} (p≈{p:.0%})"}
@@ -189,12 +244,19 @@ def _lead(hand, moves, view, samples):
     if len(moves) > 1:
         unknown = count_free_unknown(view, hand)
         if unknown <= LOOKAHEAD_MAX_UNKNOWN:
-            lead_opts = list({choice, max(cards), min(cards)})
+            lead_opts = [choice, low_in_suit(best_suit), best_in_suit(best_suit)]
             for s in candidates:
-                lead_opts.append(
-                    max(by_suit[s], key=lambda c: (_liability_score(c), c))
-                )
-            lead_opts = [c for c in dict.fromkeys(lead_opts) if c in moves]
+                lead_opts.append(best_in_suit(s))
+                lead_opts.append(low_in_suit(s))
+            lead_opts.extend(high_tier)
+            lead_opts = [
+                _play_equiv(c, hand, moves, view)
+                for c in dict.fromkeys(lead_opts)
+                if c in moves
+            ]
+            lead_opts = list(dict.fromkeys(lead_opts))
+            if any(dump_tier(c) >= 1 for c in lead_opts):
+                lead_opts = [c for c in lead_opts if dump_tier(c) >= 1] or lead_opts
             rates = estimate_lead_lose_rates(
                 view, hand, lead_opts, samples=LOOKAHEAD_SAMPLES
             )
@@ -207,7 +269,8 @@ def _lead(hand, moves, view, samples):
                     lead_opts,
                     key=lambda c: (
                         rates.get(c, 1.0),
-                        -_liability_score(c),
+                        -dump_tier(c),
+                        -dump_value(c),
                         -NUMBER_CARDS.index(c.number),
                     ),
                 )
@@ -229,6 +292,7 @@ def _lead(hand, moves, view, samples):
                 }
             )
 
+    choice = _play_equiv(choice, hand, moves, view)
     steps.append({"label": "RECOMMEND", "detail": f"Play {choice.code()}"})
     return choice, steps, {"suit_risks": suit_risks, "lookahead": lookahead}
 
@@ -240,6 +304,12 @@ def _follow(hand, moves, view, samples):
     seats = view.players_after_me_this_trick()
     p = estimate_thulla_prob(view, suit, hand, seats_after=seats, samples=samples)
     highest = view.current_highest
+    winners = [c for c in moves if highest is None or c > highest]
+    under = [c for c in moves if highest is not None and c < highest]
+    take_ok = follow_take_safe(
+        view, hand, suit, seats, p_thulla=p, threshold=THULLA_P_THRESHOLD
+    )
+    face_winners = [c for c in winners if is_face(c)]
 
     steps.append(
         {
@@ -252,49 +322,67 @@ def _follow(hand, moves, view, samples):
         {
             "label": "THULLA RISK",
             "detail": (
-                f"P(void after you) ≈ {p:.0%} "
-                f"({'duck hard' if p >= THULLA_P_THRESHOLD else 'softer follow'})"
+                f"P(void after you) ≈ {p:.0%}; "
+                f"follow-take safe={take_ok} (void risk only)"
             ),
         }
     )
 
     if p >= THULLA_P_THRESHOLD and highest is not None:
-        under = [card for card in moves if card < highest]
-        choice = max(under) if under else min(moves)
-        steps.append(
-            {
-                "label": "POLICY",
-                "detail": (
-                    "Risk high → duck with highest under the leader"
-                    if under
-                    else "Risk high but nothing under → play lowest"
-                ),
-            }
-        )
-    elif highest is not None and len(hand) > 2:
-        under = [card for card in moves if card < highest]
         if under:
-            choice = max(under)
+            choice = max(under, key=lambda c: (dump_tier(c), dump_value(c), c))
             steps.append(
                 {
                     "label": "POLICY",
-                    "detail": "Cards left → soft duck (dump high without taking lead)",
+                    "detail": "Risk high → duck; dump best under (faces > mids > keepers)",
                 }
             )
         else:
-            choice = max(moves, key=lambda c: (_liability_score(c), c))
+            choice = min(moves)
             steps.append(
                 {
                     "label": "POLICY",
-                    "detail": "Nothing under → dump liability / high",
+                    "detail": "Risk high but nothing under → play lowest",
                 }
             )
-    else:
-        choice = max(moves, key=lambda c: (_liability_score(c), c))
+    elif face_winners and take_ok:
+        choice = max(face_winners, key=lambda c: (dump_value(c), c))
         steps.append(
             {
                 "label": "POLICY",
-                "detail": "Few cards left → dump liability / high",
+                "detail": "Follow-cash → take with best face among winners",
+            }
+        )
+    elif winners and take_ok:
+        choice = max(winners, key=lambda c: (dump_tier(c), dump_value(c), c))
+        steps.append(
+            {
+                "label": "POLICY",
+                "detail": "Follow-cash → take with best dump among winners",
+            }
+        )
+    elif under:
+        choice = max(under, key=lambda c: (dump_tier(c), dump_value(c), c))
+        steps.append(
+            {
+                "label": "POLICY",
+                "detail": "Do not take → dump best under (keep 2–5)",
+            }
+        )
+    elif winners:
+        choice = min(winners)
+        steps.append(
+            {
+                "label": "POLICY",
+                "detail": "Must win but not take-safe → lowest winner",
+            }
+        )
+    else:
+        choice = max(moves, key=lambda c: (dump_tier(c), dump_value(c), c))
+        steps.append(
+            {
+                "label": "POLICY",
+                "detail": "Fallback → best dump value",
             }
         )
 
@@ -304,15 +392,24 @@ def _follow(hand, moves, view, samples):
         and highest is not None
         and choice > highest
     ):
-        under = [card for card in moves if card < highest]
         if under:
-            choice = max(under)
+            choice = max(under, key=lambda c: (dump_tier(c), dump_value(c), c))
             steps.append(
                 {
                     "label": "LAST CARD",
                     "detail": "Sole card would take lead under high risk → duck instead",
                 }
             )
+
+    raw = choice
+    choice = _play_equiv(choice, hand, moves, view)
+    if choice != raw:
+        steps.append(
+            {
+                "label": "EQUIV",
+                "detail": f"{raw.code()} → {choice.code()} (same class — play high)",
+            }
+        )
 
     steps.append({"label": "RECOMMEND", "detail": f"Play {choice.code()}"})
     return (
@@ -323,7 +420,7 @@ def _follow(hand, moves, view, samples):
                 {
                     "suit": suit,
                     "p": round(p, 3),
-                    "note": "risky" if p >= THULLA_P_THRESHOLD else "safer",
+                    "note": "follow-take safe" if take_ok else "risky",
                 }
             ]
         },
@@ -340,24 +437,34 @@ def _thulla(hand, moves, view):
     if victim is not None:
         punish = [card for card in moves if view.is_void(victim, card.colour)]
         if punish:
-            choice = max(punish, key=lambda c: (_liability_score(c), c))
+            choice = _play_equiv(
+                max(punish, key=lambda c: (dump_tier(c), dump_value(c), c)),
+                hand,
+                moves,
+                view,
+            )
             steps.append(
                 {
                     "label": "POLICY",
                     "detail": (
                         f"Victim seat {victim} void in dump suit → "
-                        "punish with highest liability"
+                        "punish with highest dump tier"
                     ),
                 }
             )
             steps.append({"label": "RECOMMEND", "detail": f"Play {choice.code()}"})
             return choice, steps, {}
 
-    liabilities = [c for c in moves if _liability_score(c) > 0]
-    if liabilities:
-        choice = max(liabilities, key=lambda c: (_liability_score(c), c))
+    faces = [c for c in moves if is_face(c)]
+    if faces:
+        choice = _play_equiv(
+            max(faces, key=lambda c: (dump_value(c), c)),
+            hand,
+            moves,
+            view,
+        )
         steps.append(
-            {"label": "POLICY", "detail": "No void-punish → dump A/K liability"}
+            {"label": "POLICY", "detail": "No void-punish → dump A/K/Q/J"}
         )
         steps.append({"label": "RECOMMEND", "detail": f"Play {choice.code()}"})
         return choice, steps, {}
@@ -365,19 +472,30 @@ def _thulla(hand, moves, view):
     counts = {}
     for card in hand:
         counts[card.colour] = counts.get(card.colour, 0) + 1
-    short = [card for card in moves if counts.get(card.colour, 0) <= 2]
+    non_keepers = [c for c in moves if not is_keeper(c)]
+    pool = non_keepers if non_keepers else list(moves)
+    short = [card for card in pool if counts.get(card.colour, 0) <= 2]
     if short:
-        # Deterministic for advice (bot uses random.choice).
-        choice = max(short)
+        choice = _play_equiv(
+            max(short, key=lambda c: (dump_tier(c), dump_value(c), c)),
+            hand,
+            moves,
+            view,
+        )
         steps.append(
             {
                 "label": "POLICY",
-                "detail": "Shorten a thin suit (≤2 cards); advice picks max of short set",
+                "detail": "Shorten a thin suit; mids before keepers",
             }
         )
     else:
-        choice = max(moves)
-        steps.append({"label": "POLICY", "detail": "Fallback → play highest"})
+        choice = _play_equiv(
+            max(pool, key=lambda c: (dump_tier(c), dump_value(c), c)),
+            hand,
+            moves,
+            view,
+        )
+        steps.append({"label": "POLICY", "detail": "Fallback → best dump value"})
 
     steps.append({"label": "RECOMMEND", "detail": f"Play {choice.code()}"})
     return choice, steps, {}
@@ -430,41 +548,51 @@ def _advise_take(session) -> dict[str, Any]:
         }
 
     case_a = case_a_should_take(view, hand, neighbor)
+    safe_face = has_dump_safe_face_lead(view, hand)
     steps.append(
         {
             "label": "CASE A",
             "detail": (
-                "Neighbor void in a suit you hold, or ≥½ known cards fill your voids"
+                "Soft hint: small hand + useful voids (not an auto-take)"
                 if case_a
-                else "No clear void / known-card reason to take"
+                else "No soft void/small-hand merge hint"
             ),
         }
     )
 
+    unknown = count_free_unknown(view, hand)
+    active_n = len(view.active_indices)
+    lose_keep = lose_merge = None
+    if active_n >= 3 and unknown <= TAKE_UNKNOWN_MAX:
+        lose_keep, lose_merge = compare_take_lose_rates(
+            view, hand, neighbor, samples=40
+        )
+        margin = TAKE_MARGIN_SAFE_FACE if safe_face else TAKE_MARGIN
+        steps.append(
+            {
+                "label": "P(LAST) MC",
+                "detail": (
+                    f"{active_n} active, {unknown} unknowns — "
+                    f"lose keep {lose_keep:.0%} vs merge {lose_merge:.0%} "
+                    f"(take if merge+{margin:.0%} < keep"
+                    + ("; safer margin — face lead left)" if safe_face else ")")
+                ),
+            }
+        )
+    else:
+        steps.append(
+            {
+                "label": "P(LAST) MC",
+                "detail": (
+                    f"Skipped (need ≥3 active and unknowns ≤ {TAKE_UNKNOWN_MAX}; "
+                    f"have {active_n} active, {unknown} unknowns) → refuse"
+                ),
+            }
+        )
+
     accept = should_cpu_take(
         hand, view, neighbor, i_am_leader, allow_late_take=True
     )
-
-    active_n = len(view.active_indices)
-    unknown = count_free_unknown(view, hand)
-    if active_n == 3 and unknown <= 8:
-        others = [
-            p for p in view.active_indices if p != view.me and p != neighbor
-        ]
-        if len(others) == 1:
-            lose_keep, lose_merge = compare_take_lose_rates(
-                view, hand, neighbor, others[0], samples=40
-            )
-            steps.append(
-                {
-                    "label": "ENDGAME MC",
-                    "detail": (
-                        f"3 left, {unknown} unknowns — "
-                        f"lose keep {lose_keep:.0%} vs merge {lose_merge:.0%} "
-                        f"(take if merge+10% < keep)"
-                    ),
-                }
-            )
 
     steps.append(
         {
@@ -484,6 +612,8 @@ def _advise_take(session) -> dict[str, Any]:
             "n_cards": n_cards,
             "i_am_leader": True,
             "case_a": case_a,
+            "lose_keep": lose_keep,
+            "lose_merge": lose_merge,
         },
         "steps": steps,
     }

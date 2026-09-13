@@ -229,9 +229,12 @@ class ThullaGame:
         return "trick_won"
 
     def take_offer_context(self, leader_idx, taker_idx):
-        """Return (target_idx, n_cards, view) for a take offer, or None if not applicable."""
+        """Return (target_idx, n_cards, view) for a take offer, or None if not applicable.
+
+        Heads-up (≤2 active): takes are disabled — asking is effectively giving up.
+        """
         leader_idx = self.ensure_leader_active(leader_idx)
-        if leader_idx is None or len(self.active_player_indices) <= 1:
+        if leader_idx is None or len(self.active_player_indices) <= 2:
             return None
         if taker_idx not in self.active_player_indices:
             return None
@@ -271,7 +274,8 @@ class ThullaGame:
     def take_phase(self, leader_idx):
         """One clockwise pass: each player may ask next clockwise; victim may refuse."""
         leader_idx = self.ensure_leader_active(leader_idx)
-        if leader_idx is None or len(self.active_player_indices) <= 1:
+        # Disabled in heads-up (≤2): taking the opponent is just resigning.
+        if leader_idx is None or len(self.active_player_indices) <= 2:
             return leader_idx
 
         self.info.sync_hands(self.players)
@@ -279,7 +283,7 @@ class ThullaGame:
         for idx in to_ask:
             if idx not in self.active_player_indices:
                 continue
-            if len(self.active_player_indices) <= 1:
+            if len(self.active_player_indices) <= 2:
                 break
             target = self.next_active(idx)
             if target is None or target == idx:

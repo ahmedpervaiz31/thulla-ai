@@ -1,8 +1,11 @@
-import { LEAD_TO_CODE, SUIT_NAME, SUIT_SYM } from "../constants/suits.js";
+import { LEAD_TO_CODE, RANK_ORDER, SUIT_NAME, SUIT_SYM } from "../constants/suits.js";
 import { parseCode, sortHand } from "../lib/cards.js";
 import { ordinal } from "../lib/ordinal.js";
 
 const SUIT_ORDER = ["Spade", "Heart", "Club", "Diamond"];
+const RANKS_ASC = Object.freeze(
+  Object.keys(RANK_ORDER).sort((a, b) => RANK_ORDER[a] - RANK_ORDER[b])
+);
 
 /**
  * Right-edge intel pad: discarded cards, known holdings, voids.
@@ -85,6 +88,11 @@ export function renderScratchPad(root, game) {
   }
 
   body.appendChild(sectionDiscarded(info.discarded || []));
+  if (info.complete_info) {
+    body.appendChild(
+      emptyNote("Heads-up: opponent hand is fully known from discards + your cards.")
+    );
+  }
   body.appendChild(sectionSeats(game.seats || [], info));
 }
 
@@ -96,6 +104,8 @@ function infoSignature(info, seats) {
     v: info.voids,
     h: (seats || []).map((s) => [s.seat, s.hand_size, s.active, s.place]),
     u: info.under_ceilings,
+    t: info.trick_cards,
+    c: info.complete_info || false,
   });
 }
 
@@ -180,15 +190,22 @@ function sectionSeats(seats, info) {
     card.appendChild(voidBlock);
 
     const ceilingKeys = Object.keys(ceilings);
-    if (ceilingKeys.length) {
+    const duckLines = [];
+    for (const suit of sortSuits(ceilingKeys)) {
+      const { played, ceiling } = ceilings[suit];
+      const live = liveRanksBetween(played, ceiling, suit, info);
+      if (!live.length) continue;
+      duckLines.push({ suit, played, ceiling, live });
+    }
+    if (duckLines.length) {
       const ceilBlock = el("div", "scratch-block");
       ceilBlock.appendChild(el("div", "scratch-label", "DUCK HINT"));
       const list = el("div", "scratch-gaps");
-      for (const suit of sortSuits(ceilingKeys)) {
-        const { played, ceiling } = ceilings[suit];
+      for (const row of duckLines) {
         const line = el("div", "scratch-gap");
-        const code = LEAD_TO_CODE[suit];
-        line.textContent = `${SUIT_SYM[code] || ""} likely empty ${shortCode(played)}…${shortCode(ceiling)}`;
+        const code = LEAD_TO_CODE[row.suit];
+        const liveTxt = row.live.map((c) => shortCode(c)).join(" ");
+        line.textContent = `${SUIT_SYM[code] || ""} under ${shortCode(row.played)} vs ${shortCode(row.ceiling)} → maybe no ${liveTxt}`;
         list.appendChild(line);
       }
       ceilBlock.appendChild(list);
@@ -198,6 +215,28 @@ function sectionSeats(seats, info) {
     sec.appendChild(card);
   }
   return sec;
+}
+
+function liveRanksBetween(playedCode, ceilingCode, suitName, info) {
+  const suit = LEAD_TO_CODE[suitName];
+  if (!suit || !playedCode || !ceilingCode) return [];
+  const lo = parseCode(playedCode);
+  const hi = parseCode(ceilingCode);
+  const accounted = new Set([
+    ...(info.discarded || []),
+    ...(info.trick_cards || []),
+  ]);
+  for (const cards of Object.values(info.known_holdings || {})) {
+    for (const c of cards || []) accounted.add(c);
+  }
+  const live = [];
+  for (const rank of RANKS_ASC) {
+    if (RANK_ORDER[rank] <= RANK_ORDER[lo.rank]) continue;
+    if (RANK_ORDER[rank] >= RANK_ORDER[hi.rank]) continue;
+    const code = `${rank}${suit}`;
+    if (!accounted.has(code)) live.push(code);
+  }
+  return live;
 }
 
 function groupBySuit(codes) {

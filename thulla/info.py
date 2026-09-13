@@ -35,7 +35,49 @@ class PlayerView:
         return self._info.current_highest_player
 
     def known_cards(self, player_idx):
+        """Hard public holdings only (thulla pickup / take). See visible_cards for 1v1."""
         return set(self._info.known_holdings.get(player_idx, set()))
+
+    def heads_up_opponent(self):
+        """Sole other active seat when exactly two remain and I am one of them."""
+        active = self.active_indices
+        if len(active) != 2 or self.me not in active:
+            return None
+        for p in active:
+            if p != self.me:
+                return p
+        return None
+
+    def deduced_hand(self, player_idx, my_hand):
+        """
+        Full hand of player_idx if uniquely determined from public facts + my_hand.
+
+        Heads-up only: with one opponent, every remaining free card must be theirs
+        (deck − discarded − my hand − known holdings − current trick). Returns None
+        if not heads-up or counts do not line up (e.g. mid-inconsistency).
+        Does not read other hidden hands — viewer-relative deduction only.
+        """
+        if player_idx == self.me:
+            return set(my_hand)
+        opp = self.heads_up_opponent()
+        if opp is None or player_idx != opp:
+            return None
+        known = self.known_cards(player_idx)
+        free = self._unassigned_cards(my_hand)
+        for card in free:
+            if self.cannot_hold(player_idx, card):
+                return None
+        full = known | set(free)
+        if len(full) != self.hand_size(player_idx):
+            return None
+        return full
+
+    def visible_cards(self, player_idx, my_hand):
+        """Hard known holdings, plus complete-info deduction when available."""
+        deduced = self.deduced_hand(player_idx, my_hand)
+        if deduced is not None:
+            return set(deduced)
+        return self.known_cards(player_idx)
 
     def cards_played_by(self, player_idx):
         """All cards this seat has played so far (public history)."""
@@ -53,6 +95,28 @@ class PlayerView:
         """
         return self._info.under_ceilings.get(player_idx, {}).get(suit)
 
+    def publicly_accounted(self):
+        """Cards whose location is already known (discarded, trick, or known holdings)."""
+        seen = set(self._info.discarded)
+        seen.update(self._info.trick_cards)
+        for cards in self._info.known_holdings.values():
+            seen.update(cards)
+        return seen
+
+    def duck_gap_unknowns(self, player_idx, suit):
+        """
+        Still-unknown ranks strictly between a duck play and its ceiling.
+        Skips cards already in discards / trick / known holdings — those are
+        facts, not soft hints (e.g. Q under A should not imply 'no K' once K
+        was also played on the trick).
+        """
+        under = self.under_ceiling(player_idx, suit)
+        if under is None:
+            return []
+        lo, hi = under
+        accounted = self.publicly_accounted()
+        return [c for c in cards_of_suit(suit) if lo < c < hi and c not in accounted]
+
     def cannot_hold(self, player_idx, card):
         """True only for hard public facts (suit voids). Soft duck/suit-high
         inferences belong in unlikely_hold — never treat those as proofs."""
@@ -64,7 +128,10 @@ class PlayerView:
         - ducked under the leader → likely no middle cards between play and ceiling
         - took/kept lead in-suit → likely no higher of that suit left
         Players can sandbag; do not use as hard deal bans.
+        Already-public cards (discarded / trick / known) are never flagged.
         """
+        if card in self.publicly_accounted():
+            return False
         under = self.under_ceiling(player_idx, card.colour)
         if under is not None:
             played, ceiling = under
@@ -75,26 +142,38 @@ class PlayerView:
             return True
         return False
 
-    def unknown_slots(self, player_idx):
+    def unknown_slots(self, player_idx, my_hand=None):
+        if my_hand is not None and self.deduced_hand(player_idx, my_hand) is not None:
+            return 0
         known_n = len(self.known_cards(player_idx))
         return max(0, self.hand_size(player_idx) - known_n)
 
     def unseen_of(self, suit, my_hand):
         seen = set(self._info.discarded)
         seen.update(c for c in my_hand if c.colour == suit)
-        for p, cards in self._info.known_holdings.items():
-            if p != self.me:
-                seen.update(c for c in cards if c.colour == suit)
+        for p in self.active_indices:
+            if p == self.me:
+                continue
+            seen.update(c for c in self.visible_cards(p, my_hand) if c.colour == suit)
         seen.update(c for c in self._info.trick_cards if c.colour == suit)
         return set(cards_of_suit(suit)) - seen
 
-    def free_cards(self, my_hand):
+    def _unassigned_cards(self, my_hand):
+        """Cards not in discarded, my hand, hard known holdings, or current trick."""
         seen = set(self._info.discarded)
         seen.update(my_hand)
         for cards in self._info.known_holdings.values():
             seen.update(cards)
         seen.update(self._info.trick_cards)
         return [c for c in create_deck() if c not in seen]
+
+    def free_cards(self, my_hand):
+        """Unknown cards still to assign across opponents (empty under heads-up complete info)."""
+        free = self._unassigned_cards(my_hand)
+        opp = self.heads_up_opponent()
+        if opp is not None and self.deduced_hand(opp, my_hand) is not None:
+            return []
+        return free
 
     def estimate_thulla_prob(self, suit, my_hand, seats_after=None, samples=200):
         from .prob import estimate_thulla_prob

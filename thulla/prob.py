@@ -1,5 +1,113 @@
 import random
 
+from .cards import NUMBER_CARDS, raise_equivalence
+
+KEEPER_RANKS = frozenset({"2", "3", "4", "5"})
+MID_RANKS = frozenset({"6", "7", "8", "9", "10"})
+FACE_DUMP_VALUES = {"A": 10, "K": 9, "Q": 8, "J": 7}
+MID_DUMP_VALUES = {"10": 5, "9": 4, "8": 3, "7": 2, "6": 1}
+KEEPER_DUMP_VALUES = {"5": -1, "4": -2, "3": -3, "2": -4}
+LONG_SUIT_LEN = 4
+HEAVY_DISCARD_COUNT = 6
+DUMP_SAFE_P_THRESHOLD = 0.5
+TAKE_UNKNOWN_MAX = 20
+TAKE_MARGIN = 0.1
+TAKE_MARGIN_SAFE_FACE = 0.15
+
+
+def is_keeper(card):
+    return card.number in KEEPER_RANKS
+
+
+def is_mid(card):
+    return card.number in MID_RANKS
+
+
+def is_face(card):
+    return card.number in FACE_DUMP_VALUES
+
+
+def dump_tier(card):
+    """2 = face, 1 = mid (6–10), 0 = keeper (2–5)."""
+    if card.number in FACE_DUMP_VALUES:
+        return 2
+    if card.number in MID_RANKS:
+        return 1
+    return 0
+
+
+def dump_value(card):
+    """Higher = prefer dumping. Faces > mids > keepers."""
+    if card.number in FACE_DUMP_VALUES:
+        return FACE_DUMP_VALUES[card.number]
+    if card.number in MID_DUMP_VALUES:
+        return MID_DUMP_VALUES[card.number]
+    if card.number in KEEPER_DUMP_VALUES:
+        return KEEPER_DUMP_VALUES[card.number]
+    return 0
+
+
+def _liability_score(card):
+    """Alias for dump_value (compat with older call sites / tests)."""
+    return dump_value(card)
+
+
+def suit_length(hand, suit):
+    return sum(1 for c in hand if c.colour == suit)
+
+
+def discarded_of_suit(view, suit):
+    return sum(1 for c in view._info.discarded if c.colour == suit)
+
+
+def suit_dump_safe(view, hand, suit, seats_after, p_thulla=None, threshold=DUMP_SAFE_P_THRESHOLD):
+    """True when *leading* a face in `suit` is acceptable (shape + void risk)."""
+    seats = list(seats_after or [])
+    if any(view.is_void(p, suit) for p in seats):
+        return False
+    if p_thulla is None:
+        p_thulla = estimate_thulla_prob(view, suit, hand, seats_after=seats)
+    if p_thulla >= threshold:
+        return False
+    length = suit_length(hand, suit)
+    if length >= LONG_SUIT_LEN:
+        return False
+    if discarded_of_suit(view, suit) >= HEAVY_DISCARD_COUNT and length >= 3:
+        return False
+    return True
+
+
+def follow_take_safe(view, hand, suit, seats_after, p_thulla=None, threshold=DUMP_SAFE_P_THRESHOLD):
+    """True when *winning* the trick on follow is acceptable (void risk only).
+
+    Length / heavy-discard are lead-shape concerns and must not block cashing A/K/Q/J.
+    """
+    seats = list(seats_after or [])
+    if any(view.is_void(p, suit) for p in seats):
+        return False
+    if p_thulla is None:
+        p_thulla = estimate_thulla_prob(view, suit, hand, seats_after=seats)
+    return p_thulla < threshold
+
+
+def has_dump_safe_face_lead(view, hand, seats_after=None, samples=200):
+    """True if we can still lead a face in a dump-safe suit (survive another round)."""
+    seats = list(seats_after) if seats_after is not None else [
+        p for p in view.active_indices if p != view.me
+    ]
+    by_suit = {}
+    for c in hand:
+        by_suit.setdefault(c.colour, []).append(c)
+    for suit, cards in by_suit.items():
+        if not any(is_face(c) for c in cards):
+            continue
+        if any(view.is_void(p, suit) for p in seats):
+            continue
+        p = estimate_thulla_prob(view, suit, hand, seats_after=seats, samples=samples)
+        if suit_dump_safe(view, hand, suit, seats, p_thulla=p):
+            return True
+    return False
+
 
 def estimate_thulla_prob(view, suit, my_hand, seats_after, samples=200):
     """P(someone in seats_after cannot follow suit)."""
@@ -11,26 +119,26 @@ def estimate_thulla_prob(view, suit, my_hand, seats_after, samples=200):
 
     max_copies = len(view.unseen_of(suit, my_hand))
     for p in seats:
-        max_copies += sum(1 for c in view.known_cards(p) if c.colour == suit)
+        max_copies += sum(1 for c in view.visible_cards(p, my_hand) if c.colour == suit)
     if len(seats) > max_copies:
         return 1.0
 
-    if all(any(c.colour == suit for c in view.known_cards(p)) for p in seats):
+    if all(any(c.colour == suit for c in view.visible_cards(p, my_hand)) for p in seats):
         if not any(c.colour == suit for c in view.free_cards(my_hand)):
             return 0.0
 
     hits = 0
     for dealt in _sample_deals(view, my_hand, samples):
-        if _someone_void(dealt, view, seats, suit):
+        if _someone_void(dealt, view, seats, suit, my_hand):
             hits += 1
     return hits / max(1, samples)
 
 
-def _someone_void(dealt, view, seats, suit):
+def _someone_void(dealt, view, seats, suit, my_hand):
     for p in seats:
         if view.is_void(p, suit):
             return True
-        has = any(c.colour == suit for c in view.known_cards(p))
+        has = any(c.colour == suit for c in view.visible_cards(p, my_hand))
         has = has or any(c.colour == suit for c in dealt.get(p, []))
         if not has:
             return True
@@ -39,7 +147,7 @@ def _someone_void(dealt, view, seats, suit):
 
 def _sample_deals(view, my_hand, samples):
     others = [p for p in view.active_indices if p != view.me]
-    slots = {p: view.unknown_slots(p) for p in others}
+    slots = {p: view.unknown_slots(p, my_hand) for p in others}
     total_slots = sum(slots.values())
     free = list(view.free_cards(my_hand))
     void_masks = {p: set(view._info.voids.get(p, set())) for p in others}
@@ -102,41 +210,71 @@ def count_free_unknown(view, my_hand):
 
 
 def case_a_should_take(view, my_hand, neighbor_idx):
+    """Conservative merge signal — one void + a big hand is not enough."""
+    n = view.hand_size(neighbor_idx)
+    if n >= 5:
+        return False
+
     my_suits = {c.colour for c in my_hand}
-    if any(view.is_void(neighbor_idx, s) for s in my_suits):
+    suits = ("Diamond", "Heart", "Spade", "Club")
+    useful_voids = [s for s in suits if view.is_void(neighbor_idx, s) and s in my_suits]
+
+    if len(useful_voids) >= 2:
         return True
-    known = list(view.known_cards(neighbor_idx))
+
+    if n > 3:
+        return False
+
+    if useful_voids:
+        return True
+
+    known = list(view.visible_cards(neighbor_idx, my_hand))
     if not known:
         return False
     my_voids = set()
-    for s in ("Diamond", "Heart", "Spade", "Club"):
+    for s in suits:
         if view.is_void(view.me, s) or not any(c.colour == s for c in my_hand):
             my_voids.add(s)
     hits = sum(1 for c in known if c.colour in my_voids)
     return hits * 2 >= len(known)
 
 
-def compare_take_lose_rates(view, my_hand, neighbor_idx, other_idx, samples=40):
-    """Return (lose_rate_keep, lose_rate_merge)."""
-    neighbor_known = list(view.known_cards(neighbor_idx))
-    other_known = list(view.known_cards(other_idx))
+def compare_take_lose_rates(view, my_hand, neighbor_idx, samples=40):
+    """Return (lose_rate_keep, lose_rate_merge) via N-player survival rollouts."""
+    active = list(view.active_indices)
+    me = view.me
+    if neighbor_idx not in active or me not in active or len(active) < 3:
+        return 1.0, 1.0
+
+    others = [p for p in active if p != me]
     lose_keep = 0
     lose_merge = 0
     n = 0
     for dealt in _sample_deals(view, my_hand, samples):
         n += 1
-        neigh = _pad_hand(
-            neighbor_known + list(dealt.get(neighbor_idx, [])),
-            view.hand_size(neighbor_idx),
-        )
-        other = _pad_hand(
-            other_known + list(dealt.get(other_idx, [])),
-            view.hand_size(other_idx),
-        )
-        if _three_way_i_lose(list(my_hand), neigh, other):
+        full = [[] for _ in range(view.player_cnt)]
+        full[me] = list(my_hand)
+        for p in others:
+            known = list(view.visible_cards(p, my_hand))
+            sampled = list(dealt.get(p, []))
+            full[p] = _pad_hand(known + sampled, view.hand_size(p))
+
+        keep_hands = [list(full[p]) for p in active]
+        me_keep = active.index(me)
+        if _n_player_i_lose(keep_hands, me_keep, me_keep, use_survival=True):
             lose_keep += 1
-        if _heads_up_i_lose(list(my_hand) + neigh, other):
+
+        merged_seats = [p for p in active if p != neighbor_idx]
+        merge_hands = []
+        for p in merged_seats:
+            if p == me:
+                merge_hands.append(list(my_hand) + list(full[neighbor_idx]))
+            else:
+                merge_hands.append(list(full[p]))
+        me_merge = merged_seats.index(me)
+        if _n_player_i_lose(merge_hands, me_merge, me_merge, use_survival=True):
             lose_merge += 1
+
     if n == 0:
         return 1.0, 1.0
     return lose_keep / n, lose_merge / n
@@ -182,45 +320,61 @@ def _three_way_i_lose(a, b, c, max_tricks=200):
     return _n_player_i_lose([a, b, c], me_idx=0, leader_idx=0, max_tricks=max_tricks, use_survival=False)
 
 
-def _liability_score(card):
-    if card.number == "A":
-        return 2
-    if card.number == "K":
-        return 1
-    return 0
-
-
 def _survival_lead_card(hand):
-    """Lead heuristic for rollouts (no MC): dump A/K suit if any, else max of shortest."""
+    """Lead heuristic for rollouts: highest dump tier, prefer shorter suits."""
     by_suit = {}
     for c in hand:
         by_suit.setdefault(c.colour, []).append(c)
-    with_liab = [
-        s for s, cs in by_suit.items() if any(_liability_score(c) > 0 for c in cs)
-    ]
-    if with_liab:
-        suit = max(
-            with_liab,
-            key=lambda s: max(_liability_score(c) for c in by_suit[s]),
-        )
-        return max(by_suit[suit], key=lambda c: (_liability_score(c), c))
+
+    def best_in_suit(s):
+        return max(by_suit[s], key=lambda c: (dump_tier(c), dump_value(c), c))
+
+    def suit_score(s):
+        best = best_in_suit(s)
+        return (-dump_tier(best), len(by_suit[s]), -dump_value(best))
+
+    # Prefer suits that are not obviously long when dumping faces/mids.
+    ranked = sorted(by_suit.keys(), key=suit_score)
+    for suit in ranked:
+        best = best_in_suit(suit)
+        if dump_tier(best) >= 2 and len(by_suit[suit]) >= LONG_SUIT_LEN:
+            continue
+        if dump_tier(best) >= 1:
+            return raise_equivalence(best, hand, hand, accounted=set(hand))
+
     suit = min(by_suit, key=lambda s: (len(by_suit[s]), min(by_suit[s])))
-    return max(by_suit[suit])
+    non_keepers = [c for c in by_suit[suit] if not is_keeper(c)]
+    choice = min(non_keepers) if non_keepers else min(by_suit[suit])
+    return raise_equivalence(choice, hand, hand, accounted=set(hand))
 
 
 def _survival_respond(hand, lead_card, highest):
-    """Follow/thulla heuristic matching soft_follow + liability dump."""
+    """Follow/thulla heuristic: cash faces on follow without length gate."""
     same = [c for c in hand if c.colour == lead_card.colour]
     if same:
-        if highest is not None and len(hand) > 2:
-            under = [c for c in same if c < highest]
-            if under:
-                return max(under)
-        return max(same)
-    liab = [c for c in hand if _liability_score(c) > 0]
-    if liab:
-        return max(liab, key=lambda c: (_liability_score(c), c))
-    return max(hand)
+        winners = [c for c in same if highest is None or c > highest]
+        under = [c for c in same if highest is not None and c < highest]
+        face_winners = [c for c in winners if is_face(c)]
+        # Rollouts have no void view — cash face winners; otherwise best dump.
+        if face_winners:
+            choice = max(face_winners, key=lambda c: (dump_value(c), c))
+        elif winners and not under:
+            choice = max(winners, key=lambda c: (dump_tier(c), dump_value(c), c))
+        elif under:
+            choice = max(under, key=lambda c: (dump_tier(c), dump_value(c), c))
+        elif winners:
+            choice = min(winners)
+        else:
+            choice = max(same, key=lambda c: (dump_tier(c), dump_value(c), c))
+        return raise_equivalence(choice, hand, same, accounted=set(hand))
+    faces = [c for c in hand if is_face(c)]
+    if faces:
+        choice = max(faces, key=lambda c: (dump_value(c), c))
+    else:
+        non_keepers = [c for c in hand if not is_keeper(c)]
+        pool = non_keepers if non_keepers else hand
+        choice = max(pool, key=lambda c: (dump_tier(c), dump_value(c), c))
+    return raise_equivalence(choice, hand, hand, accounted=set(hand))
 
 
 def _respond(hand, lead):
@@ -228,8 +382,9 @@ def _respond(hand, lead):
     same = [c for c in hand if c.colour == lead.colour]
     if same:
         under = [c for c in same if c < lead]
-        return max(under) if under else min(same)
-    return max(hand)
+        choice = max(under) if under else min(same)
+        return raise_equivalence(choice, hand, same, accounted=set(hand))
+    return raise_equivalence(max(hand), hand, hand, accounted=set(hand))
 
 
 def _n_player_i_lose(hands, me_idx, leader_idx, max_tricks=200, use_survival=True):
@@ -300,7 +455,7 @@ def estimate_lead_lose_rates(view, my_hand, candidate_cards, samples=24):
         full = [[] for _ in range(view.player_cnt)]
         full[me] = list(my_hand)
         for p in others:
-            known = list(view.known_cards(p))
+            known = list(view.visible_cards(p, my_hand))
             sampled = list(dealt.get(p, []))
             full[p] = _pad_hand(known + sampled, view.hand_size(p))
         for card in candidate_cards:

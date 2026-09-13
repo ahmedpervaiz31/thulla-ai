@@ -1,12 +1,28 @@
 import random
 
-from .cards import Card, NUMBER_CARDS, parse_card, valid_moves, format_hand, format_cards
+from .cards import (
+    Card,
+    NUMBER_CARDS,
+    parse_card,
+    valid_moves,
+    format_hand,
+    format_cards,
+    raise_equivalence,
+)
 from .prob import (
-    _liability_score,
-    case_a_should_take,
+    TAKE_MARGIN,
+    TAKE_MARGIN_SAFE_FACE,
+    TAKE_UNKNOWN_MAX,
     compare_take_lose_rates,
     count_free_unknown,
+    dump_tier,
+    dump_value,
     estimate_lead_lose_rates,
+    follow_take_safe,
+    has_dump_safe_face_lead,
+    is_face,
+    is_keeper,
+    suit_dump_safe,
 )
 
 
@@ -104,6 +120,16 @@ LOOKAHEAD_SAMPLES = 32
 LOOKAHEAD_MAX_UNKNOWN = 28
 
 
+def _equiv_accounted(hand, view):
+    if view is None:
+        return set(hand)
+    return set(hand) | view.publicly_accounted()
+
+
+def _play_equiv(card, hand, moves, view):
+    return raise_equivalence(card, hand, moves, accounted=_equiv_accounted(hand, view))
+
+
 def choose_computer_card(hand, moves, expected_cards, view, samples=DEFAULT_MC_SAMPLES):
     if not moves:
         raise ValueError("no legal moves")
@@ -142,30 +168,67 @@ def _choose_lead(hand, moves, view, samples=DEFAULT_MC_SAMPLES):
     no_void = [s for s in by_suit if not any(view.is_void(p, s) for p in seats)]
     candidates = no_void if no_void else list(by_suit)
 
-    def suit_key(s):
-        p = suit_p(s)
-        # Prefer low thulla risk; among safe suits prefer dumping A/K.
-        if p < THULLA_P_THRESHOLD:
-            best_liab = max(_liability_score(c) for c in by_suit[s])
-            return (round(p, 1), -best_liab, min(by_suit[s]))
-        return (p, 0, min(by_suit[s]))
+    safe_suits = [
+        s
+        for s in candidates
+        if suit_dump_safe(view, hand, s, seats, p_thulla=suit_p(s), threshold=THULLA_P_THRESHOLD)
+    ]
 
-    best_suit = min(candidates, key=suit_key)
-    p = suit_p(best_suit)
-    cards = by_suit[best_suit]
+    def best_in_suit(s):
+        return max(by_suit[s], key=lambda c: (dump_tier(c), dump_value(c), c))
 
-    if p >= THULLA_P_THRESHOLD:
-        choice = min(cards)
+    def low_in_suit(s):
+        cards = by_suit[s]
+        non_keepers = [c for c in cards if not is_keeper(c)]
+        pool = non_keepers if non_keepers else cards
+        return min(pool)
+
+    if safe_suits:
+        def suit_key(s):
+            best = best_in_suit(s)
+            return (-dump_tier(best), len(by_suit[s]), -dump_value(best))
+
+        best_suit = min(safe_suits, key=suit_key)
+        choice = best_in_suit(best_suit)
     else:
-        choice = max(cards, key=lambda c: (_liability_score(c), c))
+        def risk_key(s):
+            return (suit_p(s), len(by_suit[s]), min(by_suit[s]))
+
+        best_suit = min(candidates, key=risk_key)
+        p = suit_p(best_suit)
+        if p >= THULLA_P_THRESHOLD:
+            choice = low_in_suit(best_suit)
+        else:
+            choice = best_in_suit(best_suit)
+
+    # Never lead a keeper while any mid/face lead exists.
+    high_tier = [c for c in moves if dump_tier(c) >= 1]
+    if high_tier and dump_tier(choice) == 0:
+        safe_high = [c for c in high_tier if c.colour in safe_suits]
+        pool = safe_high if safe_high else high_tier
+        choice = max(
+            pool,
+            key=lambda c: (dump_tier(c), -len(by_suit[c.colour]), dump_value(c), c),
+        )
+
+    choice = _play_equiv(choice, hand, moves, view)
 
     if len(moves) > 1:
         unknown = count_free_unknown(view, hand)
         if unknown <= LOOKAHEAD_MAX_UNKNOWN:
-            lead_opts = list({choice, max(cards), min(cards)})
+            lead_opts = [choice, low_in_suit(best_suit), best_in_suit(best_suit)]
             for s in candidates:
-                lead_opts.append(max(by_suit[s], key=lambda c: (_liability_score(c), c)))
-            lead_opts = [c for c in dict.fromkeys(lead_opts) if c in moves]
+                lead_opts.append(best_in_suit(s))
+                lead_opts.append(low_in_suit(s))
+            lead_opts.extend(high_tier)
+            lead_opts = [
+                _play_equiv(c, hand, moves, view)
+                for c in dict.fromkeys(lead_opts)
+                if c in moves
+            ]
+            lead_opts = list(dict.fromkeys(lead_opts))
+            if any(dump_tier(c) >= 1 for c in lead_opts):
+                lead_opts = [c for c in lead_opts if dump_tier(c) >= 1] or lead_opts
             rates = estimate_lead_lose_rates(
                 view, hand, lead_opts, samples=LOOKAHEAD_SAMPLES
             )
@@ -174,11 +237,12 @@ def _choose_lead(hand, moves, view, samples=DEFAULT_MC_SAMPLES):
                     lead_opts,
                     key=lambda c: (
                         rates.get(c, 1.0),
-                        -_liability_score(c),
+                        -dump_tier(c),
+                        -dump_value(c),
                         -NUMBER_CARDS.index(c.number),
                     ),
                 )
-    return choice
+    return _play_equiv(choice, hand, moves, view)
 
 
 def _choose_follow(hand, moves, view, samples=DEFAULT_MC_SAMPLES):
@@ -186,19 +250,28 @@ def _choose_follow(hand, moves, view, samples=DEFAULT_MC_SAMPLES):
     seats = view.players_after_me_this_trick()
     p = view.estimate_thulla_prob(suit, hand, seats_after=seats, samples=samples)
     highest = view.current_highest
+    winners = [c for c in moves if highest is None or c > highest]
+    under = [c for c in moves if highest is not None and c < highest]
+    take_ok = follow_take_safe(
+        view, hand, suit, seats, p_thulla=p, threshold=THULLA_P_THRESHOLD
+    )
+    face_winners = [c for c in winners if is_face(c)]
 
     if p >= THULLA_P_THRESHOLD and highest is not None:
-        under = [card for card in moves if card < highest]
-        choice = max(under) if under else min(moves)
-    elif highest is not None and len(hand) > 2:
-        under = [card for card in moves if card < highest]
         if under:
-            # Soft follow: dump high without taking the lead.
-            choice = max(under)
+            choice = max(under, key=lambda c: (dump_tier(c), dump_value(c), c))
         else:
-            choice = max(moves, key=lambda c: (_liability_score(c), c))
+            choice = min(moves)
+    elif face_winners and take_ok:
+        choice = max(face_winners, key=lambda c: (dump_value(c), c))
+    elif winners and take_ok:
+        choice = max(winners, key=lambda c: (dump_tier(c), dump_value(c), c))
+    elif under:
+        choice = max(under, key=lambda c: (dump_tier(c), dump_value(c), c))
+    elif winners:
+        choice = min(winners)
     else:
-        choice = max(moves, key=lambda c: (_liability_score(c), c))
+        choice = max(moves, key=lambda c: (dump_tier(c), dump_value(c), c))
 
     if (
         len(hand) == 1
@@ -206,10 +279,9 @@ def _choose_follow(hand, moves, view, samples=DEFAULT_MC_SAMPLES):
         and highest is not None
         and choice > highest
     ):
-        under = [card for card in moves if card < highest]
         if under:
-            return max(under)
-    return choice
+            choice = max(under, key=lambda c: (dump_tier(c), dump_value(c), c))
+    return _play_equiv(choice, hand, moves, view)
 
 
 def _choose_thulla(hand, moves, view):
@@ -217,20 +289,43 @@ def _choose_thulla(hand, moves, view):
     if victim is not None:
         punish = [card for card in moves if view.is_void(victim, card.colour)]
         if punish:
-            return max(punish, key=lambda c: (_liability_score(c), c))
-    liabilities = [c for c in moves if _liability_score(c) > 0]
-    if liabilities:
-        return max(liabilities, key=lambda c: (_liability_score(c), c))
+            return _play_equiv(
+                max(punish, key=lambda c: (dump_tier(c), dump_value(c), c)),
+                hand,
+                moves,
+                view,
+            )
+    faces = [c for c in moves if is_face(c)]
+    if faces:
+        return _play_equiv(
+            max(faces, key=lambda c: (dump_value(c), c)),
+            hand,
+            moves,
+            view,
+        )
     counts = {}
     for card in hand:
         counts[card.colour] = counts.get(card.colour, 0) + 1
-    short = [card for card in moves if counts.get(card.colour, 0) <= 2]
+    non_keepers = [c for c in moves if not is_keeper(c)]
+    pool = non_keepers if non_keepers else list(moves)
+    short = [card for card in pool if counts.get(card.colour, 0) <= 2]
     if short:
-        return random.choice(short)
-    return max(moves)
+        return _play_equiv(
+            max(short, key=lambda c: (dump_tier(c), dump_value(c), c)),
+            hand,
+            moves,
+            view,
+        )
+    return _play_equiv(
+        max(pool, key=lambda c: (dump_tier(c), dump_value(c), c)),
+        hand,
+        moves,
+        view,
+    )
 
 
 def should_cpu_take(hand, view, neighbor_idx, i_am_leader, allow_late_take=True):
+    """Take only when merge clearly lowers P(finish last)."""
     if view is None or neighbor_idx is None:
         return False
     active_n = len(view.active_indices)
@@ -238,26 +333,20 @@ def should_cpu_take(hand, view, neighbor_idx, i_am_leader, allow_late_take=True)
         return False
     if not i_am_leader:
         return False
-    if case_a_should_take(view, hand, neighbor_idx):
-        if active_n == 3 and count_free_unknown(view, hand) <= 8:
-            others = [p for p in view.active_indices if p != view.me and p != neighbor_idx]
-            if len(others) == 1:
-                lose_keep, lose_merge = compare_take_lose_rates(
-                    view, hand, neighbor_idx, others[0], samples=40
-                )
-                return lose_merge + 0.1 < lose_keep
-        return True
     if not allow_late_take:
         return False
-    if active_n == 3 and count_free_unknown(view, hand) <= 8:
-        others = [p for p in view.active_indices if p != view.me and p != neighbor_idx]
-        if len(others) != 1:
-            return False
-        lose_keep, lose_merge = compare_take_lose_rates(
-            view, hand, neighbor_idx, others[0], samples=40
-        )
-        return lose_merge + 0.1 < lose_keep
-    return False
+    if count_free_unknown(view, hand) > TAKE_UNKNOWN_MAX:
+        return False
+
+    lose_keep, lose_merge = compare_take_lose_rates(
+        view, hand, neighbor_idx, samples=40
+    )
+    margin = (
+        TAKE_MARGIN_SAFE_FACE
+        if has_dump_safe_face_lead(view, hand)
+        else TAKE_MARGIN
+    )
+    return lose_merge + margin < lose_keep
 
 
 class ComputerPlayer(BasePlayer):

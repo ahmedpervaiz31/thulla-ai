@@ -142,6 +142,47 @@ class SessionFinishTests(unittest.TestCase):
         self.assertIn("known_holdings", data["public_info"])
 
 
+class SessionHeadsUpTests(unittest.TestCase):
+    def test_skips_take_phase_when_two_left(self):
+        session = GameSession("human", 3, deal=False)
+        session.game.players[1] = ScriptedPlayer("CPU1")
+        session.game.players[2] = ScriptedPlayer("CPU2")
+        session.game.set_hands(
+            [
+                [C("A", "Heart"), C("K", "Heart")],
+                [C("2", "Club"), C("3", "Club")],
+                [],
+            ]
+        )
+        session.game.active_player_indices = [0, 1]
+        session.game.winners = [session.game.players[2]]
+        session.game.info.active_indices = [0, 1]
+        session.game.info.sync_hands(session.game.players)
+        session.leader = 0
+        session._begin_take_pass()
+        self.assertNotEqual(session.phase, "take")
+        self.assertIn(session.phase, ("trick", "first_trick"))
+        self.assertEqual(session.pending["type"], "play")
+
+    def test_client_public_info_shows_deduced_opponent(self):
+        from thulla.cards import create_deck
+
+        session = GameSession("human", 3, deal=False)
+        me = [C("2", "Heart"), C("3", "Club")]
+        opp = [C("4", "Spade"), C("5", "Diamond")]
+        rest = [c for c in create_deck() if c not in me and c not in opp]
+        session.game.set_hands([me, opp, []])
+        session.game.active_player_indices = [0, 1]
+        session.game.winners = [session.game.players[2]]
+        session.game.info.active_indices = [0, 1]
+        session.game.info.discarded = set(rest)
+        session.game.info.sync_hands(session.game.players)
+        data = session.to_dict()
+        self.assertTrue(data["public_info"].get("complete_info"))
+        known = set(data["public_info"]["known_holdings"]["1"])
+        self.assertEqual(known, {"4S", "5D"})
+
+
 class SessionAiModeTests(unittest.TestCase):
     def test_ai_mode_step_plays_without_human(self):
         session = GameSession("ai", 3)

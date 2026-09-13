@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from starlette.responses import Response
 
 from thulla.advise import advise_session
-from thulla.persist import get_or_load_session, persist_and_return
+from thulla.persist import get_or_load_session, persist_and_return, ensure_games_layout
 from thulla.session import create_session
 
 # Windows / some hosts omit .js → module MIME; browsers reject text/plain modules.
@@ -20,6 +20,8 @@ mimetypes.add_type("text/javascript", ".js")
 mimetypes.add_type("text/css", ".css")
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+ensure_games_layout()
 
 
 class ModuleStaticFiles(StaticFiles):
@@ -118,7 +120,16 @@ def api_advise(game_id: str):
     session = get_or_load_session(game_id)
     if session is None:
         raise HTTPException(status_code=404, detail="game not found")
-    return advise_session(session)
+    advice = advise_session(session)
+    if advice.get("available"):
+        session.record_advice_request(advice)
+        try:
+            from thulla.persist import save_session
+
+            save_session(session)
+        except OSError:
+            pass
+    return advice
 
 
 @app.post("/api/games/{game_id}/step")
