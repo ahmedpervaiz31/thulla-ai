@@ -3,7 +3,16 @@ import unittest
 from thulla.cards import Card, cards_of_suit
 from thulla.info import PublicInfo
 from thulla.players import ComputerPlayer, should_cpu_take
-from thulla.prob import case_a_should_take, estimate_lead_lose_rates, estimate_thulla_prob
+from thulla.prob import (
+    case_a_should_take,
+    estimate_lead_lose_rates,
+    estimate_thulla_dump_outcomes,
+    estimate_thulla_prob,
+    immediate_self_thulla_prob,
+    score_lead_candidates,
+    score_thulla_candidates,
+    thulla_dump_score_key,
+)
 
 
 def C(number, colour):
@@ -242,6 +251,83 @@ class EstimateThullaProbTests(unittest.TestCase):
             self.assertGreaterEqual(p, 0.0)
             self.assertLessEqual(p, 1.0)
 
+    def test_immediate_self_thulla_first_void_is_certain(self):
+        info = PublicInfo(4)
+        info.hand_sizes = [6, 8, 10, 4]
+        info.active_indices = [0, 1, 2, 3]
+        info.voids[0].add("Club")
+        info.voids[3].add("Club")
+        view = info.view_for(2, [3, 0, 1])
+        hand = [
+            C("3", "Club"),
+            C("4", "Club"),
+            C("5", "Club"),
+            C("7", "Club"),
+            C("9", "Club"),
+            C("10", "Club"),
+            C("J", "Club"),
+            C("3", "Diamond"),
+            C("3", "Heart"),
+            C("3", "Spade"),
+        ]
+        p_jc = immediate_self_thulla_prob(view, hand, C("J", "Club"))
+        p_3s = immediate_self_thulla_prob(view, hand, C("3", "Spade"))
+        self.assertEqual(p_jc, 1.0)
+        self.assertLess(p_3s, 0.5)
+
+    def test_jc_loop_regression_leads_safe_singleton(self):
+        """Game 1ddc1f4c trick 10: do not replay JC into known club voids."""
+        info = PublicInfo(4)
+        info.hand_sizes = [6, 8, 10, 4]
+        info.active_indices = [0, 1, 2, 3]
+        info.voids[0].add("Club")
+        info.voids[3].add("Club")
+        view = info.view_for(2, [3, 0, 1])
+        bot = ComputerPlayer("CPU2", mc_samples=50)
+        bot.receive_cards(
+            [
+                C("3", "Club"),
+                C("4", "Club"),
+                C("5", "Club"),
+                C("7", "Club"),
+                C("9", "Club"),
+                C("10", "Club"),
+                C("J", "Club"),
+                C("3", "Diamond"),
+                C("3", "Heart"),
+                C("3", "Spade"),
+            ]
+        )
+        played = bot.play_turn(None, view)
+        self.assertNotEqual(played, C("J", "Club"))
+        self.assertIn(played, {C("3", "Spade"), C("3", "Diamond"), C("3", "Heart")})
+
+    def test_score_lead_candidates_keeper_beats_trapped_face(self):
+        info = PublicInfo(4)
+        info.hand_sizes = [6, 8, 10, 4]
+        info.active_indices = [0, 1, 2, 3]
+        info.voids[0].add("Club")
+        info.voids[3].add("Club")
+        view = info.view_for(2, [3, 0, 1])
+        hand = [
+            C("3", "Club"),
+            C("4", "Club"),
+            C("5", "Club"),
+            C("7", "Club"),
+            C("9", "Club"),
+            C("10", "Club"),
+            C("J", "Club"),
+            C("3", "Diamond"),
+            C("3", "Heart"),
+            C("3", "Spade"),
+        ]
+        candidates = hand
+        scores, _, pickup = score_lead_candidates(
+            view, hand, candidates, samples=48
+        )
+        self.assertLess(scores[C("3", "Spade")], scores[C("J", "Club")])
+        self.assertEqual(pickup[C("J", "Club")], 1.0)
+
 
 class TakeDecisionTests(unittest.TestCase):
     def test_refuse_when_two_left(self):
@@ -299,6 +385,97 @@ class TakeDecisionTests(unittest.TestCase):
         ]
         # Either unknowns too high or MC does not prefer merge.
         self.assertFalse(should_cpu_take(hand, view, 0, i_am_leader=True))
+
+
+class ThullaDumpScoreTests(unittest.TestCase):
+    def _mid_trick_view(self, n=3):
+        info = PublicInfo(n)
+        info.active_indices = list(range(n))
+        info.hand_sizes = [2] * n
+        info.current_highest = C("9", "Spade")
+        info.current_highest_player = 0
+        info.led_suit = "Spade"
+        info.trick_cards = [C("9", "Spade")]
+        return info
+
+    def test_dump_outcomes_are_probabilities(self):
+        info = self._mid_trick_view(3)
+        info.hand_sizes = [2, 3, 6]
+        view = info.view_for(1, [2])
+        hand = [C("A", "Club"), C("2", "Diamond"), C("5", "Heart")]
+        lose, away, shed = estimate_thulla_dump_outcomes(
+            view, hand, [hand[0], hand[1]], samples=24
+        )
+        for d in (lose, away, shed):
+            self.assertEqual(set(d), {hand[0], hand[1]})
+            for v in d.values():
+                self.assertGreaterEqual(v, 0.0)
+                self.assertLessEqual(v, 1.0)
+
+    def test_score_includes_escape_pressure(self):
+        info = self._mid_trick_view(3)
+        info.hand_sizes = [1, 2, 8]
+        view = info.view_for(1, [2])
+        hand = [C("A", "Heart"), C("3", "Club")]
+        scores, lose_rates, extras = score_thulla_candidates(
+            view, hand, hand, samples=40
+        )
+        for c in hand:
+            self.assertIn(c, scores)
+            self.assertAlmostEqual(
+                scores[c],
+                lose_rates[c]
+                + 0.2 * extras[c]["p_victim_away_soon"]
+                + 0.15 * extras[c]["p_card_shed_soon"],
+                places=5,
+            )
+
+    def test_bot_prefers_void_suit_over_easy_ace(self):
+        """Victim void in Clubs: sticky Club should beat cashable Ace Diamond."""
+        info = PublicInfo(2)
+        info.hand_sizes = [4, 2]
+        info.current_highest = C("9", "Heart")
+        info.current_highest_player = 0
+        info.led_suit = "Heart"
+        info.trick_cards = [C("9", "Heart")]
+        info.voids[0].add("Club")
+        view = info.view_for(1, [])
+        bot = ComputerPlayer("CPU", mc_samples=48)
+        bot.receive_cards([C("5", "Club"), C("A", "Diamond")])
+        played = bot.play_turn(cards_of_suit("Heart"), view)
+        self.assertEqual(played, C("5", "Club"))
+
+    def test_near_empty_victim_avoids_pure_face_gift_when_sticky_exists(self):
+        """When victim is one card from cycling out, Ace dump raises away; sticky wins often."""
+        info = PublicInfo(3)
+        info.active_indices = [0, 1, 2]
+        # Victim already played high; 1 card left before pickup.
+        info.hand_sizes = [1, 2, 10]
+        info.current_highest = C("10", "Spade")
+        info.current_highest_player = 0
+        info.led_suit = "Spade"
+        info.trick_cards = [C("10", "Spade")]
+        view = info.view_for(1, [2])
+        ace = C("A", "Heart")
+        sticky = C("2", "Club")
+        hand = [ace, sticky]
+        scores, _, extras = score_thulla_candidates(
+            view, hand, hand, samples=64
+        )
+        # Ace should look easier to shed / more escape-prone than the deuce.
+        self.assertGreaterEqual(
+            extras[ace]["p_card_shed_soon"] + extras[ace]["p_victim_away_soon"],
+            extras[sticky]["p_card_shed_soon"] + extras[sticky]["p_victim_away_soon"] - 0.05,
+        )
+        choice = min(hand, key=lambda c: thulla_dump_score_key(c, scores, extras))
+        # With escape priced in, sticky should not lose badly to Ace; prefer sticky
+        # when scores are close or Ace is clearly worse.
+        if scores[ace] + 0.02 < scores[sticky]:
+            self.fail(
+                f"Ace unexpectedly much better: ace={scores[ace]:.3f} "
+                f"sticky={scores[sticky]:.3f} extras={extras}"
+            )
+        self.assertEqual(choice, sticky)
 
 
 if __name__ == "__main__":

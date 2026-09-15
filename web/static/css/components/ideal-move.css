@@ -242,6 +242,33 @@
   line-height: 1.5;
 }
 
+.ideal-exact-line {
+  margin: 0;
+  padding-left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ideal-exact-step {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 6px;
+  color: var(--text);
+}
+
+.ideal-exact-who {
+  color: var(--gold);
+  min-width: 28px;
+  letter-spacing: 0.4px;
+}
+
+.ideal-exact-note {
+  color: var(--muted);
+}
+
 .table.ideal-open .controls {
   left: 240px;
 }

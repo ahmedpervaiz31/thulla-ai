@@ -21,7 +21,10 @@
   background: rgba(20, 12, 36, 0.95);
   border: 2px solid #3a2a58;
   border-radius: 12px;
-  transition: width 0.28s ease;
+  transition:
+    width 0.28s ease,
+    border-color 0.22s ease,
+    box-shadow 0.22s ease;
   will-change: width;
   overflow: visible;
 }
@@ -67,10 +70,16 @@
   color: #1a1020;
   padding: 4px 8px;
   font-size: 7px;
-  visibility: hidden;
+  opacity: 0;
+  transform: scale(0.92);
+  transition:
+    opacity 0.18s ease,
+    transform 0.18s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .you-rail.turn .you-bar-turn {
+  opacity: 1;
+  transform: none;
   visibility: visible;
 }
 

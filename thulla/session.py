@@ -666,6 +666,14 @@ class GameSession:
         whose_turn = None
         if self.pending and self.pending.get("type") in ("play", "take", "give"):
             whose_turn = self.pending["seat"]
+        elif (
+            self.phase == "trick_reveal"
+            and self.trick is not None
+            and self.trick.result == "thulla"
+            and self.trick.thulla_by is not None
+        ):
+            # Keep the thulla-giver highlighted while the pot is held.
+            whose_turn = self.trick.thulla_by
 
         # Lazy import: persist imports GameSession.
         from .persist import info_to_dict

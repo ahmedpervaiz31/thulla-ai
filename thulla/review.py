@@ -30,6 +30,11 @@ def compact_advice(advice: dict[str, Any] | None) -> dict[str, Any] | None:
         out["suit_risks"] = advice["suit_risks"]
     if advice.get("lookahead"):
         out["lookahead"] = advice["lookahead"]
+    if advice.get("exact_line"):
+        out["exact_line"] = advice["exact_line"]
+    if advice.get("exact_1v1"):
+        out["exact_1v1"] = True
+        out["outcome"] = advice.get("outcome")
     return out
 
 
@@ -170,10 +175,25 @@ def _format_play_line(play: dict[str, Any]) -> str:
         elif followed is False:
             flag = " ✗ differed from Ideal"
         extra.append(f"  - Ideal: `{rec_s}`{flag}")
-        for step in (adv.get("steps") or [])[:4]:
+        for step in adv.get("steps") or []:
             label = step.get("label", "")
             detail = step.get("detail", "")
             extra.append(f"    - {label}: {detail}")
+        # Prefer showing exact line even if truncated above missed it.
+        if adv.get("exact_line") and not any(
+            (s.get("label") or "") == "LINE" for s in (adv.get("steps") or [])
+        ):
+            parts = []
+            for step in adv["exact_line"]:
+                if not step.get("card"):
+                    parts.append(step.get("note") or "")
+                else:
+                    who = "You" if step.get("side") == "you" else "Opp"
+                    note = step.get("note") or ""
+                    parts.append(
+                        f"{who} {step['card']}" + (f" ({note})" if note else "")
+                    )
+            extra.append(f"    - LINE: {' → '.join(parts)}")
     return "\n".join(bits + extra)
 
 

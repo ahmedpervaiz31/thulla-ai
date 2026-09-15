@@ -62,7 +62,7 @@ Not a search engine — heuristics + light Monte Carlo:
 - Lead: among dump-safe suits (not long, not heavily discarded, no known/high void risk), pick highest tier preferring shorter holdings; never lead a keeper when any mid/face is legal. Optional lose-rate lookahead when `free_unknowns ≤ 28` (keepers dropped from opts if tier≥1 remains).
 - Follow: cash best face/winner when void risk after you is low (`follow_take_safe` — void/`P(thulla)` only; length/discards do **not** block). Otherwise dump best under by tier. Hard-duck when void risk after you is high. No soft-duck sandbagging.
 - **Equivalence raise** (`cards.raise_equivalence`): after any pick, always play the **highest** of that card’s same-suit equivalence class — continuous ranks, or gaps fully accounted (discards / known / trick / own hand). Prevents gifting a low undercutter via thulla (e.g. hold 4–8 → never play the 4 when the 8 is equivalent).
-- Thulla dump: prefer victim’s known void, else best face, else mids / short suits before keepers.
+- Thulla dump: MC over a shortlist (≤4 cards); early/mid uses short-horizon away/shed only, late (≤20 unknowns) adds capped lose-rate rollouts. Scores `lose + w·away + w·shed` so easy-escape gifts lose to stickier dumps when that matters. Dedicated sample budget (8–24), never the 200 void-estimate count. Ideal Move shows rates. Always `raise_equivalence` after the pick.
 - Take: leader only, ≥3 active; take **only** when MC says merge clearly lowers P(finish last) (`unknowns ≤ 20`); case-A void/small-hand is a soft hint only. Stronger margin if a dump-safe face lead remains.
 
 `RandomPlayer` = uniform random among legal moves (and never takes). That’s the primary strength baseline.
@@ -87,6 +87,6 @@ Completed / ongoing reviews include opening hands, trick-by-trick plays, takes, 
 Push win-rate / place distribution vs random (and later vs self) without breaking rules fidelity:
 
 - Soft hints as **weights** in deal sampling (still not hard facts)
-- 1v1 / tiny-unknown **exact** search instead of MC
+- 1v1 / tiny-unknown **exact** search: implemented in `thulla/heads_up.py` when `deduced_hand` succeeds and combined hands ≤ 14 cards (lead/follow/thulla); alpha-beta + node/time budget (advise reuses the search outcome; larger or timed-out 1v1 falls back to MC)
 - Smarter take/give when ≥3; multi-trick planning beyond lead lookahead
 - Keep eval reproducible via `run_eval.py`

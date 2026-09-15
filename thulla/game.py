@@ -19,6 +19,7 @@ class TrickState:
     done: bool = False
     result: str | None = None  # "thulla" | "trick_won"
     next_leader: int | None = None
+    thulla_by: int | None = None  # seat that dumped off-suit
 
 
 class ThullaGame:
@@ -207,6 +208,7 @@ class ThullaGame:
             self.info.finish_thulla(trick.highest_idx, trick.stack)
             trick.done = True
             trick.result = "thulla"
+            trick.thulla_by = seat_idx
             trick.next_leader = trick.highest_idx
             return "thulla"
 

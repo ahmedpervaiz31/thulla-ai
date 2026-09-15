@@ -326,19 +326,29 @@ export function createTablePage({ navigate }) {
   function applyAiBannerOverrides(eventBanner, game, autoEnabled) {
     if (game.finished) {
       eventBanner.textContent = "";
+      eventBanner.dataset.text = "";
+      eventBanner.classList.remove("show", "thulla-banner");
       return;
     }
     if (game.phase === "trick_reveal") {
-      eventBanner.textContent = game.last_event || "TRICK COMPLETE";
+      // TrickPot already set banner + show class.
       return;
     }
+    let text = "";
     if (game.mode === "ai" && !autoEnabled && game.pending?.type === "take") {
-      eventBanner.textContent = `${game.seats[game.pending.seat].name}: ask ${game.pending.target_name} for ${game.pending.n_cards}? (NEXT STEP)`;
-      return;
+      text = `${game.seats[game.pending.seat].name}: ask ${game.pending.target_name} for ${game.pending.n_cards}? (NEXT STEP)`;
+    } else if (
+      game.mode === "ai" &&
+      !autoEnabled &&
+      game.pending?.type === "give"
+    ) {
+      text = `${game.seats[game.pending.seat].name}: give to ${game.pending.asker_name}? (NEXT STEP)`;
     }
-    if (game.mode === "ai" && !autoEnabled && game.pending?.type === "give") {
-      eventBanner.textContent = `${game.seats[game.pending.seat].name}: give to ${game.pending.asker_name}? (NEXT STEP)`;
-    }
+    if (!text) return;
+    eventBanner.dataset.text = text;
+    eventBanner.textContent = text;
+    eventBanner.classList.remove("thulla-banner");
+    eventBanner.classList.add("show");
   }
 
   function sizeCenterForPlayers(n) {
@@ -403,26 +413,37 @@ export function createTablePage({ navigate }) {
       arena.dataset.players = String(n);
       sizeCenterForPlayers(n);
 
+      const turnOpts = {
+        turnLabel:
+          game.phase === "trick_reveal" &&
+          (game.last_event || "").toUpperCase().includes("THULLA")
+            ? "THULLA"
+            : "TURN",
+      };
+
       fillSeatSlot(
         root.querySelector('[data-slot="top"]'),
         slots.top,
         "top",
         game.seats,
-        game.whose_turn
+        game.whose_turn,
+        turnOpts
       );
       fillSeatSlot(
         root.querySelector('[data-slot="left"]'),
         slots.left,
         "left",
         game.seats,
-        game.whose_turn
+        game.whose_turn,
+        turnOpts
       );
       fillSeatSlot(
         root.querySelector('[data-slot="right"]'),
         slots.right,
         "right",
         game.seats,
-        game.whose_turn
+        game.whose_turn,
+        turnOpts
       );
 
       const youRail = root.querySelector('[data-role="you-rail"]');
@@ -432,16 +453,18 @@ export function createTablePage({ navigate }) {
           null,
           "bottom",
           game.seats,
-          game.whose_turn
+          game.whose_turn,
+          turnOpts
         );
-        renderYouBar(youRail, game.seats[0], game.whose_turn);
+        renderYouBar(youRail, game.seats[0], game.whose_turn, turnOpts);
       } else {
         fillSeatSlot(
           root.querySelector('[data-slot="bottom"]'),
           slots.bottom,
           "bottom",
           game.seats,
-          game.whose_turn
+          game.whose_turn,
+          turnOpts
         );
         youRail.classList.add("hidden");
       }

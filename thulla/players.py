@@ -9,20 +9,27 @@ from .cards import (
     format_cards,
     raise_equivalence,
 )
+from .heads_up import try_exact_from_view
 from .prob import (
     TAKE_MARGIN,
     TAKE_MARGIN_SAFE_FACE,
     TAKE_UNKNOWN_MAX,
+    THULLA_MC_MAX_CANDIDATES,
     compare_take_lose_rates,
     count_free_unknown,
     dump_tier,
     dump_value,
-    estimate_lead_lose_rates,
     follow_take_safe,
     has_dump_safe_face_lead,
+    immediate_self_thulla_prob,
     is_face,
     is_keeper,
+    LOOKAHEAD_SAMPLES,
+    score_lead_candidates,
+    score_thulla_candidates,
+    shortlist_thulla_candidates,
     suit_dump_safe,
+    thulla_dump_score_key,
 )
 
 
@@ -116,8 +123,67 @@ class HumanPlayer(BasePlayer):
 
 THULLA_P_THRESHOLD = 0.5
 DEFAULT_MC_SAMPLES = 200
-LOOKAHEAD_SAMPLES = 32
-LOOKAHEAD_MAX_UNKNOWN = 28
+LOOKAHEAD_MAX_UNKNOWN = 52
+# Cap MC lead options early/mid (full hand still uses heuristic shortlist).
+LEAD_MC_MAX_CANDIDATES = 4
+
+
+def _lead_mc_samples(unknown):
+    """Fewer deal samples when the unknown pool is large (early/mid game)."""
+    if unknown <= 12:
+        return LOOKAHEAD_SAMPLES
+    if unknown <= 24:
+        return 24
+    if unknown <= 36:
+        return 16
+    return 12
+
+
+def _thulla_mc_samples(unknown):
+    """Dump MC budget — never reuse the 200 void-estimate sample count.
+
+    Horizon-only rollouts early; a bit more when full lose-rate is on.
+    """
+    if unknown <= 12:
+        return 24
+    if unknown <= 20:
+        return 16
+    if unknown <= 36:
+        return 12
+    return 8
+
+
+def _lead_mc_shortlist(lead_opts, view, max_n=LEAD_MC_MAX_CANDIDATES):
+    """Keep MC cheap: prefer low-void suits, diversify suits, then dump tier."""
+    if len(lead_opts) <= max_n:
+        return list(lead_opts)
+    seats = view.players_after_me_this_trick()
+    if not seats:
+        seats = [p for p in view.active_indices if p != view.me]
+
+    def void_count(card):
+        return sum(1 for p in seats if view.is_void(p, card.colour))
+
+    ranked = sorted(
+        lead_opts,
+        key=lambda c: (void_count(c), -dump_tier(c), -dump_value(c), c.code()),
+    )
+    picked = []
+    seen_suits = set()
+    for card in ranked:
+        if card.colour in seen_suits:
+            continue
+        picked.append(card)
+        seen_suits.add(card.colour)
+        if len(picked) >= max_n:
+            return picked
+    for card in ranked:
+        if card in picked:
+            continue
+        picked.append(card)
+        if len(picked) >= max_n:
+            break
+    return picked
 
 
 def _equiv_accounted(hand, view):
@@ -136,15 +202,52 @@ def choose_computer_card(hand, moves, expected_cards, view, samples=DEFAULT_MC_S
     if view is None:
         return random.choice(moves)
 
+    exact = try_exact_from_view(hand, moves, expected_cards, view)
+    if exact is not None:
+        return exact
+
     must_follow = bool(expected_cards) and any(card in expected_cards for card in hand)
     if expected_cards is None:
         return _choose_lead(hand, moves, view, samples=samples)
     if must_follow:
         return _choose_follow(hand, moves, view, samples=samples)
-    return _choose_thulla(hand, moves, view)
+    return _choose_thulla(hand, moves, view, samples=samples)
+
+
+def _lead_score_key(card, scores, pickups=None):
+    """Lower is better. On equal score prefer low self-thulla, then low dump tier."""
+    pickup = 0.0 if not pickups else pickups.get(card, 0.0)
+    return (
+        scores.get(card, 1.0),
+        pickup,
+        dump_tier(card),
+        dump_value(card),
+        -NUMBER_CARDS.index(card.number),
+    )
 
 
 def _choose_lead(hand, moves, view, samples=DEFAULT_MC_SAMPLES):
+    lead_opts = list(
+        dict.fromkeys(_play_equiv(c, hand, moves, view) for c in moves)
+    )
+
+    unknown = count_free_unknown(view, hand)
+    if len(lead_opts) > 1 and unknown <= LOOKAHEAD_MAX_UNKNOWN:
+        shortlist = _lead_mc_shortlist(lead_opts, view)
+        scores, _, pickups = score_lead_candidates(
+            view, hand, shortlist, samples=_lead_mc_samples(unknown)
+        )
+        if scores:
+            choice = min(
+                shortlist, key=lambda c: _lead_score_key(c, scores, pickups)
+            )
+            return _play_equiv(choice, hand, moves, view)
+
+    return _choose_lead_heuristic(hand, moves, view, samples=samples)
+
+
+def _choose_lead_heuristic(hand, moves, view, samples=DEFAULT_MC_SAMPLES):
+    """Fallback lead when too many unknowns for full MC scoring."""
     seats = view.players_after_me_this_trick()
     if not seats:
         seats = [p for p in view.active_indices if p != view.me]
@@ -165,8 +268,10 @@ def _choose_lead(hand, moves, view, samples=DEFAULT_MC_SAMPLES):
         p_cache[suit] = p
         return p
 
-    no_void = [s for s in by_suit if not any(view.is_void(p, s) for p in seats)]
-    candidates = no_void if no_void else list(by_suit)
+    def void_count_after(suit):
+        return sum(1 for p in seats if view.is_void(p, suit))
+
+    candidates = list(by_suit)
 
     safe_suits = [
         s
@@ -192,7 +297,7 @@ def _choose_lead(hand, moves, view, samples=DEFAULT_MC_SAMPLES):
         choice = best_in_suit(best_suit)
     else:
         def risk_key(s):
-            return (suit_p(s), len(by_suit[s]), min(by_suit[s]))
+            return (suit_p(s), void_count_after(s), len(by_suit[s]), min(by_suit[s]))
 
         best_suit = min(candidates, key=risk_key)
         p = suit_p(best_suit)
@@ -201,47 +306,30 @@ def _choose_lead(hand, moves, view, samples=DEFAULT_MC_SAMPLES):
         else:
             choice = best_in_suit(best_suit)
 
-    # Never lead a keeper while any mid/face lead exists.
-    high_tier = [c for c in moves if dump_tier(c) >= 1]
-    if high_tier and dump_tier(choice) == 0:
-        safe_high = [c for c in high_tier if c.colour in safe_suits]
-        pool = safe_high if safe_high else high_tier
-        choice = max(
-            pool,
-            key=lambda c: (dump_tier(c), -len(by_suit[c.colour]), dump_value(c), c),
-        )
-
     choice = _play_equiv(choice, hand, moves, view)
 
     if len(moves) > 1:
-        unknown = count_free_unknown(view, hand)
-        if unknown <= LOOKAHEAD_MAX_UNKNOWN:
-            lead_opts = [choice, low_in_suit(best_suit), best_in_suit(best_suit)]
-            for s in candidates:
-                lead_opts.append(best_in_suit(s))
-                lead_opts.append(low_in_suit(s))
-            lead_opts.extend(high_tier)
-            lead_opts = [
-                _play_equiv(c, hand, moves, view)
-                for c in dict.fromkeys(lead_opts)
-                if c in moves
-            ]
-            lead_opts = list(dict.fromkeys(lead_opts))
-            if any(dump_tier(c) >= 1 for c in lead_opts):
-                lead_opts = [c for c in lead_opts if dump_tier(c) >= 1] or lead_opts
-            rates = estimate_lead_lose_rates(
-                view, hand, lead_opts, samples=LOOKAHEAD_SAMPLES
+        all_opts = list(
+            dict.fromkeys(_play_equiv(c, hand, moves, view) for c in moves)
+        )
+        pickups = {
+            c: immediate_self_thulla_prob(
+                view, hand, c, seats_after=seats, samples=16
             )
-            if rates:
-                choice = min(
-                    lead_opts,
-                    key=lambda c: (
-                        rates.get(c, 1.0),
-                        -dump_tier(c),
-                        -dump_value(c),
-                        -NUMBER_CARDS.index(c.number),
-                    ),
-                )
+            for c in all_opts
+        }
+        if any(p < THULLA_P_THRESHOLD for p in pickups.values()):
+            choice = min(
+                all_opts,
+                key=lambda c: (
+                    void_count_after(c.colour),
+                    suit_p(c.colour),
+                    pickups[c],
+                    -dump_tier(c),
+                    -dump_value(c),
+                    c,
+                ),
+            )
     return _play_equiv(choice, hand, moves, view)
 
 
@@ -284,44 +372,27 @@ def _choose_follow(hand, moves, view, samples=DEFAULT_MC_SAMPLES):
     return _play_equiv(choice, hand, moves, view)
 
 
-def _choose_thulla(hand, moves, view):
-    victim = view.current_highest_player
-    if victim is not None:
-        punish = [card for card in moves if view.is_void(victim, card.colour)]
-        if punish:
-            return _play_equiv(
-                max(punish, key=lambda c: (dump_tier(c), dump_value(c), c)),
-                hand,
-                moves,
-                view,
-            )
-    faces = [c for c in moves if is_face(c)]
-    if faces:
-        return _play_equiv(
-            max(faces, key=lambda c: (dump_value(c), c)),
-            hand,
-            moves,
-            view,
-        )
-    counts = {}
-    for card in hand:
-        counts[card.colour] = counts.get(card.colour, 0) + 1
-    non_keepers = [c for c in moves if not is_keeper(c)]
-    pool = non_keepers if non_keepers else list(moves)
-    short = [card for card in pool if counts.get(card.colour, 0) <= 2]
-    if short:
-        return _play_equiv(
-            max(short, key=lambda c: (dump_tier(c), dump_value(c), c)),
-            hand,
-            moves,
-            view,
-        )
-    return _play_equiv(
-        max(pool, key=lambda c: (dump_tier(c), dump_value(c), c)),
-        hand,
-        moves,
-        view,
+def _choose_thulla(hand, moves, view, samples=None):
+    """Dump via MC lose-rate + short-horizon victim-escape pressure."""
+    opts = list(dict.fromkeys(_play_equiv(c, hand, moves, view) for c in moves))
+    if not opts:
+        raise ValueError("no legal thulla dumps")
+    if len(opts) == 1:
+        return opts[0]
+
+    unknown = count_free_unknown(view, hand)
+    # Ignore the void-estimate sample count (often 200) — dump MC has its own budget.
+    n_samples = _thulla_mc_samples(unknown)
+    if samples is not None:
+        n_samples = min(n_samples, max(8, samples))
+    shortlist = shortlist_thulla_candidates(
+        view, hand, opts, max_n=THULLA_MC_MAX_CANDIDATES
     )
+    scores, _, extras = score_thulla_candidates(
+        view, hand, shortlist, samples=n_samples
+    )
+    choice = min(shortlist, key=lambda c: thulla_dump_score_key(c, scores, extras))
+    return _play_equiv(choice, hand, moves, view)
 
 
 def should_cpu_take(hand, view, neighbor_idx, i_am_leader, allow_late_take=True):

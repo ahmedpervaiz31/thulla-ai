@@ -101,6 +101,9 @@ export function renderIdealMove(root, advice, { loading = false } = {}) {
   body.appendChild(renderRecommend(advice));
   body.appendChild(renderSituation(advice));
 
+  if (advice.exact_line?.length) {
+    body.appendChild(renderExactLine(advice));
+  }
   if (advice.suit_risks?.length) {
     body.appendChild(renderRisks(advice.suit_risks));
   }
@@ -173,6 +176,42 @@ function renderSituation(advice) {
   }
 
   sec.appendChild(lines);
+  return sec;
+}
+
+function renderExactLine(advice) {
+  const sec = el("section", "ideal-section");
+  const win = advice.outcome === 1;
+  const lose = advice.outcome === -1;
+  sec.appendChild(
+    el(
+      "h3",
+      "ideal-h",
+      win ? "FORCED WIN LINE" : lose ? "BEST LOSE LINE" : "EXACT LINE"
+    )
+  );
+  const list = el("ol", "ideal-exact-line");
+  for (const step of advice.exact_line) {
+    const li = el("li", "ideal-exact-step");
+    if (!step.card) {
+      li.appendChild(el("span", "ideal-exact-note", step.note || ""));
+    } else {
+      const who = step.side === "you" ? "You" : "Opp";
+      li.appendChild(el("span", "ideal-exact-who", who));
+      li.appendChild(chip(step.card));
+      if (step.note) {
+        li.appendChild(el("span", "ideal-exact-note", step.note));
+      }
+    }
+    list.appendChild(li);
+  }
+  sec.appendChild(list);
+  const tip = el(
+    "p",
+    "ideal-note",
+    "Both sides optimal from complete info — compare to how the game actually went."
+  );
+  sec.appendChild(tip);
   return sec;
 }
 

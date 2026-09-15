@@ -7,7 +7,7 @@ import { createCardEl } from "./Card.js";
 /**
  * YOU rail + hand cards + sort chips wiring helpers.
  */
-export function renderYouBar(railRoot, seat, whoseTurn) {
+export function renderYouBar(railRoot, seat, whoseTurn, opts = {}) {
   if (!seat) {
     railRoot.classList.add("hidden");
     return;
@@ -26,6 +26,8 @@ export function renderYouBar(railRoot, seat, whoseTurn) {
   } else {
     metaEl.textContent = `${seat.hand_size} CARDS`;
   }
+  const turnEl = railRoot.querySelector(".you-bar-turn");
+  if (turnEl) turnEl.textContent = opts.turnLabel || "TURN";
 }
 
 /**

@@ -5,30 +5,40 @@ from __future__ import annotations
 from typing import Any
 
 from .cards import NUMBER_CARDS, valid_moves
+from .heads_up import exact_principal_line, try_exact_with_value_from_view
 from .players import (
     DEFAULT_MC_SAMPLES,
     LOOKAHEAD_MAX_UNKNOWN,
-    LOOKAHEAD_SAMPLES,
     THULLA_P_THRESHOLD,
+    _lead_mc_samples,
+    _lead_mc_shortlist,
+    _lead_score_key,
     _play_equiv,
+    _thulla_mc_samples,
     should_cpu_take,
 )
 from .prob import (
+    LOOKAHEAD_SAMPLES,
     TAKE_MARGIN,
     TAKE_MARGIN_SAFE_FACE,
     TAKE_UNKNOWN_MAX,
+    THULLA_MC_MAX_CANDIDATES,
     case_a_should_take,
     compare_take_lose_rates,
     count_free_unknown,
     dump_tier,
     dump_value,
-    estimate_lead_lose_rates,
     estimate_thulla_prob,
     follow_take_safe,
     has_dump_safe_face_lead,
+    immediate_self_thulla_prob,
     is_face,
     is_keeper,
+    score_lead_candidates,
+    score_thulla_candidates,
+    shortlist_thulla_candidates,
     suit_dump_safe,
+    thulla_dump_score_key,
 )
 
 
@@ -88,12 +98,44 @@ def _advise_play(session) -> dict[str, Any]:
     must_follow = bool(expected) and any(c in expected for c in hand)
     if expected is None:
         kind = "lead"
-        card, steps, extra = _lead(hand, moves, view, samples=DEFAULT_MC_SAMPLES)
     elif must_follow:
         kind = "follow"
-        card, steps, extra = _follow(hand, moves, view, samples=DEFAULT_MC_SAMPLES)
     else:
         kind = "thulla"
+
+    exact_card, exact_value = try_exact_with_value_from_view(
+        hand, moves, expected, view
+    )
+    if exact_card is not None:
+        outcome = exact_value[0] if exact_value is not None else None
+        opp = view.heads_up_opponent()
+        deduced = view.deduced_hand(opp, hand) if opp is not None else None
+        line = []
+        if deduced is not None:
+            if expected is None:
+                line = exact_principal_line(
+                    hand,
+                    deduced,
+                    i_am_leader=True,
+                    first_card=exact_card,
+                    max_ms=None,
+                )
+            else:
+                line = exact_principal_line(
+                    hand,
+                    deduced,
+                    i_am_leader=False,
+                    lead_card=expected[0],
+                    highest=view.current_highest,
+                    first_card=exact_card,
+                    max_ms=None,
+                )
+        card, steps, extra = _exact_advice(exact_card, kind, outcome, line)
+    elif expected is None:
+        card, steps, extra = _lead(hand, moves, view, samples=DEFAULT_MC_SAMPLES)
+    elif must_follow:
+        card, steps, extra = _follow(hand, moves, view, samples=DEFAULT_MC_SAMPLES)
+    else:
         card, steps, extra = _thulla(hand, moves, view)
 
     highest = view.current_highest
@@ -115,6 +157,45 @@ def _advise_play(session) -> dict[str, Any]:
         "steps": steps,
         **extra,
     }
+
+
+def _exact_advice(card, kind, outcome, line=None):
+    """Build advise steps from a completed exact search (no second search)."""
+    steps = [
+        {
+            "label": "SITUATION",
+            "detail": f"Heads-up complete info — exact 1v1 search ({kind})",
+        }
+    ]
+    if outcome == 1:
+        steps.append({"label": "EXACT 1v1", "detail": "Force win with optimal play"})
+    elif outcome == -1:
+        steps.append(
+            {
+                "label": "EXACT 1v1",
+                "detail": "Losing — minimize leftover cards (stay ready for a blunder)",
+            }
+        )
+    else:
+        steps.append({"label": "EXACT 1v1", "detail": f"Play {card.code()}"})
+
+    line = line or []
+    if line:
+        parts = []
+        for step in line:
+            if not step.get("card"):
+                parts.append(step.get("note") or "")
+                continue
+            who = "You" if step.get("side") == "you" else "Opp"
+            note = step.get("note") or ""
+            parts.append(f"{who} {step['card']}" + (f" ({note})" if note else ""))
+        steps.append({"label": "LINE", "detail": " → ".join(parts)})
+
+    steps.append({"label": "RECOMMEND", "detail": f"Play {card.code()}"})
+    extra = {"exact_1v1": True, "outcome": outcome}
+    if line:
+        extra["exact_line"] = line
+    return card, steps, extra
 
 
 def _lead(hand, moves, view, samples):
@@ -140,14 +221,18 @@ def _lead(hand, moves, view, samples):
         p_cache[suit] = p
         return p
 
+    def void_count_after(suit):
+        return sum(1 for p in seats if view.is_void(p, suit))
+
     suit_risks = []
     for suit in by_suit:
         p = suit_p(suit)
+        voids = void_count_after(suit)
         safe = suit_dump_safe(
             view, hand, suit, seats, p_thulla=p, threshold=THULLA_P_THRESHOLD
         )
-        if p >= 1.0 and any(view.is_void(x, suit) for x in seats):
-            note = "someone after you is void"
+        if voids:
+            note = f"{voids} known void(s) after you"
         elif safe:
             note = "lead dump-safe"
         elif p < THULLA_P_THRESHOLD:
@@ -164,133 +249,67 @@ def _lead(hand, moves, view, samples):
         )
         steps.append({"label": "THULLA RISK", "detail": f"{suit}: {p:.0%} — {note}"})
 
-    no_void = [s for s in by_suit if not any(view.is_void(p, s) for p in seats)]
-    candidates = no_void if no_void else list(by_suit)
-    if no_void and len(no_void) < len(by_suit):
-        skipped = [s for s in by_suit if s not in no_void]
-        steps.append(
-            {
-                "label": "FILTER",
-                "detail": f"Skip suits with known voids after you: {', '.join(skipped)}",
-            }
-        )
-
-    safe_suits = [
-        s
-        for s in candidates
-        if suit_dump_safe(
-            view, hand, s, seats, p_thulla=suit_p(s), threshold=THULLA_P_THRESHOLD
-        )
-    ]
-
-    def best_in_suit(s):
-        return max(by_suit[s], key=lambda c: (dump_tier(c), dump_value(c), c))
-
-    def low_in_suit(s):
-        cards = by_suit[s]
-        non_keepers = [c for c in cards if not is_keeper(c)]
-        pool = non_keepers if non_keepers else cards
-        return min(pool)
-
-    high_tier = [c for c in moves if dump_tier(c) >= 1]
-
-    if safe_suits:
-        def suit_key(s):
-            best = best_in_suit(s)
-            return (-dump_tier(best), len(by_suit[s]), -dump_value(best))
-
-        best_suit = min(safe_suits, key=suit_key)
-        choice = best_in_suit(best_suit)
-        card_rule = (
-            f"lead dump-safe → tier/short ({choice.code()}, "
-            f"tier {dump_tier(choice)}, len {len(by_suit[best_suit])})"
-        )
-    else:
-        def risk_key(s):
-            return (suit_p(s), len(by_suit[s]), min(by_suit[s]))
-
-        best_suit = min(candidates, key=risk_key)
-        p = suit_p(best_suit)
-        if p >= THULLA_P_THRESHOLD:
-            raw = low_in_suit(best_suit)
-            choice = _play_equiv(raw, hand, moves, view)
-            card_rule = (
-                "high thulla risk → lead low (prefer non-keeper)"
-                if choice == raw
-                else f"high thulla risk → equiv-raise {raw.code()}→{choice.code()}"
-            )
-        else:
-            choice = best_in_suit(best_suit)
-            card_rule = "no lead dump-safe suit → best available dump"
-
-    if high_tier and dump_tier(choice) == 0:
-        safe_high = [c for c in high_tier if c.colour in safe_suits]
-        pool = safe_high if safe_high else high_tier
-        choice = max(
-            pool,
-            key=lambda c: (dump_tier(c), -len(by_suit[c.colour]), dump_value(c), c),
-        )
-        card_rule = f"block keeper lead → {choice.code()}"
-
-    choice = _play_equiv(choice, hand, moves, view)
-    p = suit_p(best_suit)
-
-    steps.append(
-        {"label": "SUIT PICK", "detail": f"{best_suit} (p≈{p:.0%})"}
+    lead_opts = list(
+        dict.fromkeys(_play_equiv(c, hand, moves, view) for c in moves)
     )
-    steps.append({"label": "CARD RULE", "detail": card_rule})
-
+    unknown = count_free_unknown(view, hand)
     lookahead = None
-    if len(moves) > 1:
-        unknown = count_free_unknown(view, hand)
-        if unknown <= LOOKAHEAD_MAX_UNKNOWN:
-            lead_opts = [choice, low_in_suit(best_suit), best_in_suit(best_suit)]
-            for s in candidates:
-                lead_opts.append(best_in_suit(s))
-                lead_opts.append(low_in_suit(s))
-            lead_opts.extend(high_tier)
-            lead_opts = [
-                _play_equiv(c, hand, moves, view)
-                for c in dict.fromkeys(lead_opts)
-                if c in moves
+    choice = lead_opts[0] if lead_opts else moves[0]
+
+    if len(lead_opts) > 1 and unknown <= LOOKAHEAD_MAX_UNKNOWN:
+        shortlist = _lead_mc_shortlist(lead_opts, view)
+        scores, lose_rates, pickup_probs = score_lead_candidates(
+            view, hand, shortlist, samples=_lead_mc_samples(unknown)
+        )
+        if scores:
+            lookahead = [
+                {
+                    "card": c.code(),
+                    "lose_rate": round(lose_rates.get(c, 1.0), 3),
+                    "pickup_prob": round(pickup_probs.get(c, 0.0), 3),
+                    "score": round(scores[c], 3),
+                }
+                for c in sorted(
+                    shortlist, key=lambda c: _lead_score_key(c, scores, pickup_probs)
+                )
             ]
-            lead_opts = list(dict.fromkeys(lead_opts))
-            if any(dump_tier(c) >= 1 for c in lead_opts):
-                lead_opts = [c for c in lead_opts if dump_tier(c) >= 1] or lead_opts
-            rates = estimate_lead_lose_rates(
-                view, hand, lead_opts, samples=LOOKAHEAD_SAMPLES
+            choice = min(
+                shortlist, key=lambda c: _lead_score_key(c, scores, pickup_probs)
             )
-            if rates:
-                lookahead = [
-                    {"card": c.code(), "lose_rate": round(rates[c], 3)}
-                    for c in sorted(rates, key=lambda c: (rates[c], c.code()))
-                ]
-                choice = min(
-                    lead_opts,
-                    key=lambda c: (
-                        rates.get(c, 1.0),
-                        -dump_tier(c),
-                        -dump_value(c),
-                        -NUMBER_CARDS.index(c.number),
+            best = lookahead[0]
+            steps.append(
+                {
+                    "label": "SCORE",
+                    "detail": (
+                        f"{unknown} unknowns ≤ {LOOKAHEAD_MAX_UNKNOWN}: "
+                        f"{best['card']} score={best['score']:.2f} "
+                        f"(lose {best['lose_rate']:.0%}, "
+                        f"self-pickup {best['pickup_prob']:.0%})"
                     ),
-                )
-                steps.append(
-                    {
-                        "label": "LOOKAHEAD",
-                        "detail": (
-                            f"{unknown} unknowns ≤ {LOOKAHEAD_MAX_UNKNOWN}: "
-                            f"lose-rate sim → {choice.code()} "
-                            f"({rates[choice]:.0%} finish last)"
-                        ),
-                    }
-                )
-        else:
+                }
+            )
+            top = lookahead[: min(5, len(lookahead))]
             steps.append(
                 {
                     "label": "LOOKAHEAD",
-                    "detail": f"Skipped ({unknown} unknowns > {LOOKAHEAD_MAX_UNKNOWN})",
+                    "detail": "; ".join(
+                        f"{row['card']}={row['score']:.2f}" for row in top
+                    ),
                 }
             )
+    elif len(lead_opts) > 1:
+        steps.append(
+            {
+                "label": "LOOKAHEAD",
+                "detail": f"Heuristic fallback ({unknown} unknowns > {LOOKAHEAD_MAX_UNKNOWN})",
+            }
+        )
+        from .players import _choose_lead_heuristic
+
+        choice = _choose_lead_heuristic(hand, moves, view, samples=samples)
+        steps.append(
+            {"label": "POLICY", "detail": f"Heuristic lead → {choice.code()}"}
+        )
 
     choice = _play_equiv(choice, hand, moves, view)
     steps.append({"label": "RECOMMEND", "detail": f"Play {choice.code()}"})
@@ -432,73 +451,69 @@ def _thulla(hand, moves, view):
     steps = [
         {"label": "SITUATION", "detail": "Cannot follow — thulla dump"},
     ]
-    victim = view.current_highest_player
+    opts = list(dict.fromkeys(_play_equiv(c, hand, moves, view) for c in moves))
+    if not opts:
+        raise ValueError("no legal thulla dumps")
 
-    if victim is not None:
-        punish = [card for card in moves if view.is_void(victim, card.colour)]
-        if punish:
-            choice = _play_equiv(
-                max(punish, key=lambda c: (dump_tier(c), dump_value(c), c)),
-                hand,
-                moves,
-                view,
-            )
-            steps.append(
-                {
-                    "label": "POLICY",
-                    "detail": (
-                        f"Victim seat {victim} void in dump suit → "
-                        "punish with highest dump tier"
-                    ),
-                }
-            )
-            steps.append({"label": "RECOMMEND", "detail": f"Play {choice.code()}"})
-            return choice, steps, {}
+    unknown = count_free_unknown(view, hand)
+    n_samples = _thulla_mc_samples(unknown)
+    shortlist = shortlist_thulla_candidates(
+        view, hand, opts, max_n=THULLA_MC_MAX_CANDIDATES
+    )
+    scores, lose_rates, extras = score_thulla_candidates(
+        view, hand, shortlist, samples=n_samples
+    )
+    choice = min(shortlist, key=lambda c: thulla_dump_score_key(c, scores, extras))
+    choice = _play_equiv(choice, hand, moves, view)
 
-    faces = [c for c in moves if is_face(c)]
-    if faces:
-        choice = _play_equiv(
-            max(faces, key=lambda c: (dump_value(c), c)),
-            hand,
-            moves,
-            view,
-        )
-        steps.append(
-            {"label": "POLICY", "detail": "No void-punish → dump A/K/Q/J"}
-        )
-        steps.append({"label": "RECOMMEND", "detail": f"Play {choice.code()}"})
-        return choice, steps, {}
-
-    counts = {}
-    for card in hand:
-        counts[card.colour] = counts.get(card.colour, 0) + 1
-    non_keepers = [c for c in moves if not is_keeper(c)]
-    pool = non_keepers if non_keepers else list(moves)
-    short = [card for card in pool if counts.get(card.colour, 0) <= 2]
-    if short:
-        choice = _play_equiv(
-            max(short, key=lambda c: (dump_tier(c), dump_value(c), c)),
-            hand,
-            moves,
-            view,
-        )
-        steps.append(
+    ranked = sorted(shortlist, key=lambda c: thulla_dump_score_key(c, scores, extras))
+    dump_rows = []
+    mode = "full lose+away+shed" if (extras.get(choice) or {}).get("full_lose") else "away+shed only"
+    steps.append(
+        {
+            "label": "MC BUDGET",
+            "detail": f"{n_samples} deals × {len(shortlist)} cards ({mode}; {unknown} unknowns)",
+        }
+    )
+    for c in ranked[:6]:
+        info = extras.get(c) or {}
+        dump_rows.append(
             {
-                "label": "POLICY",
-                "detail": "Shorten a thin suit; mids before keepers",
+                "card": c.code(),
+                "score": round(scores.get(c, 1.0), 3),
+                "lose_rate": round(lose_rates.get(c, 1.0), 3),
+                "p_victim_away_soon": round(info.get("p_victim_away_soon", 0.0), 3),
+                "p_card_shed_soon": round(info.get("p_card_shed_soon", 0.0), 3),
+                "creates_void": bool(info.get("creates_void")),
             }
         )
-    else:
-        choice = _play_equiv(
-            max(pool, key=lambda c: (dump_tier(c), dump_value(c), c)),
-            hand,
-            moves,
-            view,
+        score_s = f"{scores.get(c, 1.0):.2f}"
+        lose_s = f"{lose_rates.get(c, 1.0):.0%}"
+        away_s = f"{info.get('p_victim_away_soon', 0.0):.0%}"
+        shed_s = f"{info.get('p_card_shed_soon', 0.0):.0%}"
+        void_s = " void+" if info.get("creates_void") else ""
+        steps.append(
+            {
+                "label": "DUMP MC",
+                "detail": (
+                    f"{c.code()}: score={score_s} lose={lose_s} "
+                    f"away≈{away_s} shed≈{shed_s}{void_s}"
+                ),
+            }
         )
-        steps.append({"label": "POLICY", "detail": "Fallback → best dump value"})
 
+    best_info = extras.get(choice) or {}
+    if best_info.get("p_victim_away_soon", 0) >= 0.35:
+        reason = "escape risk priced in — still best lose/away score"
+    elif best_info.get("p_card_shed_soon", 0) <= 0.25:
+        reason = "sticky dump — low chance victim sheds clean soon"
+    elif best_info.get("creates_void"):
+        reason = "finishes a suit void while keeping lose/away low"
+    else:
+        reason = "lowest lose-rate + victim-away score"
+    steps.append({"label": "POLICY", "detail": reason})
     steps.append({"label": "RECOMMEND", "detail": f"Play {choice.code()}"})
-    return choice, steps, {}
+    return choice, steps, {"thulla_dump": dump_rows}
 
 
 def _advise_take(session) -> dict[str, Any]:

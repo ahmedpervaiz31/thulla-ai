@@ -183,6 +183,37 @@ class SessionHeadsUpTests(unittest.TestCase):
         self.assertEqual(known, {"4S", "5D"})
 
 
+class SessionThullaHighlightTests(unittest.TestCase):
+    def test_thulla_giver_highlighted_during_reveal(self):
+        session = GameSession("human", 3, deal=False)
+        session.game.players[1] = ScriptedPlayer("CPU1")
+        session.game.players[2] = ScriptedPlayer("CPU2")
+        session.game.players[1].queue_plays([C("9", "Heart")])
+        session.game.players[2].queue_plays([C("K", "Spade")])
+
+        session.game.set_hands(
+            [
+                [C("2", "Heart"), C("4", "Club")],
+                [C("9", "Heart"), C("5", "Club")],
+                [C("K", "Spade"), C("6", "Club")],
+            ]
+        )
+        session.leader = 0
+        session._start_trick(first_trick=False)
+        session.advance_until_input()
+
+        state = session.play_card("2H")
+        while state.get("pending") and state["pending"]["type"] == "play":
+            state = session.step()
+
+        self.assertEqual(state["phase"], "trick_reveal")
+        self.assertEqual(state["pending"]["type"], "reveal")
+        self.assertIn("THULLA", state["last_event"] or "")
+        # CPU2 dumped off-suit — keep their seat lit while pot is held.
+        self.assertEqual(state["whose_turn"], 2)
+        self.assertEqual(session.trick.thulla_by, 2)
+
+
 class SessionAiModeTests(unittest.TestCase):
     def test_ai_mode_step_plays_without_human(self):
         session = GameSession("ai", 3)

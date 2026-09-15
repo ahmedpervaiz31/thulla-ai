@@ -162,6 +162,7 @@ def trick_to_dict(trick: TrickState | None) -> dict[str, Any] | None:
         "done": trick.done,
         "result": trick.result,
         "next_leader": trick.next_leader,
+        "thulla_by": trick.thulla_by,
     }
 
 
@@ -188,6 +189,7 @@ def trick_from_dict(data: dict[str, Any] | None) -> TrickState | None:
         done=bool(data.get("done")),
         result=data.get("result"),
         next_leader=data.get("next_leader"),
+        thulla_by=data.get("thulla_by"),
     )
 
 

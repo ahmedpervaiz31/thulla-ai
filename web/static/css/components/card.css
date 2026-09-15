@@ -1,6 +1,6 @@
 @keyframes dealIn {
   from {
-    transform: translateY(-18px) scale(0.75);
+    transform: translateY(-14px) scale(0.82);
     opacity: 0;
   }
   to {
@@ -25,7 +25,11 @@
   user-select: none;
   position: relative;
   box-shadow: 0 4px 0 #0006;
-  transition: transform 0.12s, border-color 0.12s;
+  transition:
+    transform 0.18s cubic-bezier(0.22, 1, 0.36, 1),
+    border-color 0.15s ease,
+    box-shadow 0.18s ease,
+    opacity 0.15s ease;
 }
 
 .playing-card.small {
@@ -78,7 +82,7 @@
 }
 
 .playing-card.deal-in {
-  animation: dealIn 0.4s ease-out;
+  animation: dealIn 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 .card-back {
@@ -96,4 +100,19 @@
 
 .card-back.stacked:first-child {
   margin-left: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .playing-card {
+    transition: none;
+  }
+
+  .playing-card.deal-in {
+    animation: none;
+  }
+
+  .playing-card.legal:hover,
+  .playing-card.selected {
+    transform: none;
+  }
 }

@@ -19,7 +19,11 @@ export function renderTrickPot(root, game, prevTrickLen) {
     : "LEAD: —";
   potLabel.textContent = `POT: ${game.trick?.cards?.length || 0}`;
 
-  trickBox.classList.toggle("revealing", game.phase === "trick_reveal");
+  const revealing = game.phase === "trick_reveal";
+  const thullaReveal =
+    revealing && (game.last_event || "").toUpperCase().includes("THULLA");
+  trickBox.classList.toggle("revealing", revealing);
+  trickBox.classList.toggle("thulla", thullaReveal);
 
   const cards = game.trick?.cards || [];
   const existing = [...trickCards.querySelectorAll(".trick-play")];
@@ -38,15 +42,20 @@ export function renderTrickPot(root, game, prevTrickLen) {
   if (!samePrefix) {
     trickCards.innerHTML = "";
     cards.forEach((p, i) => {
-      trickCards.appendChild(makeTrickPlay(p, i >= prevTrickLen));
+      trickCards.appendChild(
+        makeTrickPlay(p, i >= prevTrickLen, i === cards.length - 1 && i >= prevTrickLen)
+      );
     });
   } else if (cards.length < existing.length) {
     for (let i = existing.length - 1; i >= cards.length; i--) {
       existing[i].remove();
     }
   } else {
+    existing.forEach((el) => el.classList.remove("fresh"));
     for (let i = existing.length; i < cards.length; i++) {
-      trickCards.appendChild(makeTrickPlay(cards[i], i >= prevTrickLen));
+      trickCards.appendChild(
+        makeTrickPlay(cards[i], i >= prevTrickLen, i === cards.length - 1)
+      );
     }
   }
 
@@ -84,15 +93,30 @@ export function renderTrickPot(root, game, prevTrickLen) {
   }
   if (game.finished) banner = "";
 
-  eventBanner.textContent = banner;
+  const prevBanner = eventBanner.dataset.text || "";
+  eventBanner.dataset.text = banner;
+  eventBanner.classList.toggle("thulla-banner", thullaReveal);
+  if (banner !== prevBanner) {
+    eventBanner.classList.remove("show");
+    eventBanner.textContent = banner;
+    if (banner) {
+      // Retrigger fade-in when copy changes.
+      void eventBanner.offsetWidth;
+      eventBanner.classList.add("show");
+    }
+  } else {
+    eventBanner.textContent = banner;
+    eventBanner.classList.toggle("show", Boolean(banner));
+  }
 
   // TablePage may override for AI take/give prompts when AUTO is off.
   return { prevTrickLen: nextPrev, eventBanner };
 }
 
-function makeTrickPlay(play, dealIn) {
+function makeTrickPlay(play, dealIn, fresh) {
   const wrap = document.createElement("div");
   wrap.className = "trick-play";
+  if (fresh) wrap.classList.add("fresh");
   wrap.dataset.sig = `${play.player}|${play.card}`;
 
   const label = document.createElement("div");
