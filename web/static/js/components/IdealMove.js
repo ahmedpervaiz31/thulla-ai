@@ -1,6 +1,9 @@
 import { LEAD_TO_CODE, SUIT_NAME, SUIT_SYM } from "../constants/suits.js";
 import { parseCode } from "../lib/cards.js";
+import { el } from "../lib/dom.js";
+import { bindEdgePad, setPadOpen } from "../lib/edgePad.js";
 
+// Matches CSS token --pad-ms (0.22s).
 const PANEL_MS = 220;
 
 /**
@@ -8,60 +11,19 @@ const PANEL_MS = 220;
  * is owned by TablePage via setIdealOpen / onToggle.
  */
 export function bindIdealMove(root, { onToggle } = {}) {
-  const handle = root.querySelector('[data-role="ideal-toggle"]');
-  if (!handle) return;
-
-  let dragStartX = null;
-  let dragMoved = false;
-  let dragStartOpen = false;
-
-  handle.addEventListener("click", (ev) => {
-    if (dragMoved) {
-      ev.preventDefault();
-      return;
-    }
-    const open = !root.classList.contains("ideal-open");
-    onToggle?.(open);
+  bindEdgePad(root, {
+    handleRole: "ideal-toggle",
+    openClass: "ideal-open",
+    openSign: 1,
+    onToggle,
   });
-
-  const onPointerDown = (ev) => {
-    if (ev.button != null && ev.button !== 0) return;
-    dragStartX = ev.clientX;
-    dragMoved = false;
-    dragStartOpen = root.classList.contains("ideal-open");
-    handle.setPointerCapture?.(ev.pointerId);
-  };
-
-  const onPointerMove = (ev) => {
-    if (dragStartX == null) return;
-    const dx = ev.clientX - dragStartX; // pull right = positive
-    if (Math.abs(dx) > 10) dragMoved = true;
-    if (!dragStartOpen && dx > 48) {
-      dragStartOpen = true;
-      onToggle?.(true);
-    } else if (dragStartOpen && dx < -48) {
-      dragStartOpen = false;
-      onToggle?.(false);
-    }
-  };
-
-  const onPointerUp = () => {
-    dragStartX = null;
-  };
-
-  handle.addEventListener("pointerdown", onPointerDown);
-  handle.addEventListener("pointermove", onPointerMove);
-  handle.addEventListener("pointerup", onPointerUp);
-  handle.addEventListener("pointercancel", onPointerUp);
 }
 
 export function setIdealOpen(root, open) {
-  root.classList.toggle("ideal-open", open);
-  const handle = root.querySelector('[data-role="ideal-toggle"]');
-  if (handle) {
-    handle.setAttribute("aria-expanded", open ? "true" : "false");
-    handle.title = open ? "Close ideal move" : "Open ideal move";
-  }
+  setPadOpen(root, "ideal-open", "ideal-toggle", open, {
+    openTitle: "Open ideal move",
+    closeTitle: "Close ideal move",
+  });
 }
 
 export function setIdealVisible(root, visible) {
@@ -281,9 +243,3 @@ function chip(code) {
   return node;
 }
 
-function el(tag, className, text) {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text != null) node.textContent = text;
-  return node;
-}

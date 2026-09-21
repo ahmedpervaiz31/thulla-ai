@@ -60,13 +60,31 @@ class ReviewHelpersTests(unittest.TestCase):
                     "pot": ["AS", "10S"],
                 }
             ],
-            "takes": [],
+            "takes": [
+                {
+                    "after_trick": 1,
+                    "asker": "CPU1",
+                    "target": "You",
+                    "n_cards": 2,
+                    "given": False,
+                    "advice": {
+                        "recommended": {"type": "take", "accept": False},
+                        "steps": [
+                            {"label": "POLICY", "detail": "Bot never asks"},
+                            {"label": "RECOMMEND", "detail": "Decline"},
+                        ],
+                    },
+                    "followed_advice": True,
+                }
+            ],
             "advice_requests": [],
         }
         md = completed_markdown(payload)
         self.assertIn("differed from Ideal", md)
         self.assertIn("Ideal: `9S`", md)
         self.assertIn("Opening hands", md)
+        self.assertIn("Ideal: no ✓", md)
+        self.assertIn("POLICY: Bot never asks", md)
 
 
 if __name__ == "__main__":

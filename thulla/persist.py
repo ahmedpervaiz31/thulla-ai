@@ -14,6 +14,7 @@ from .info import PublicInfo
 from .players import ComputerPlayer
 from .review import completed_markdown, completed_payload, new_review
 from .session import GameSession, InteractiveSeat, SESSIONS
+from .ui_frames import load_review_payload
 
 # games/ongoing|completed/{human_vs_ai|ai_vs_ai}/{game_id}.json
 GAMES_ROOT = Path(__file__).resolve().parent.parent / "games"
@@ -337,8 +338,6 @@ def session_from_checkpoint(data: dict[str, Any]) -> GameSession:
         session.review = new_review(mode, names or [p.name for p in players])
     session._review_trick = data.get("review_trick")
     session.last_advice = data.get("last_advice")
-    # Legacy noisy event log (ignored going forward).
-    session.event_log = list(data.get("events") or [])
     return session
 
 
@@ -350,6 +349,116 @@ def persist_and_return(session: GameSession) -> dict:
         # Disk failures should not break play.
         pass
     return session.to_dict()
+
+
+def list_saved_games(bucket: str = "completed") -> list[dict[str, Any]]:
+    """Summaries for lobby history (newest first)."""
+    if bucket not in BUCKETS:
+        raise ValueError(f"bucket must be one of {BUCKETS}")
+    ensure_games_layout()
+    games: list[dict[str, Any]] = []
+    for folder in MODE_DIRS.values():
+        root = GAMES_ROOT / bucket / folder
+        if not root.is_dir():
+            continue
+        for path in root.glob("*.json"):
+            try:
+                data = load_checkpoint(path)
+            except (OSError, json.JSONDecodeError):
+                continue
+            mode = data.get("mode")
+            if mode not in MODE_DIRS:
+                mode = "human" if folder == "human_vs_ai" else "ai"
+            result = data.get("result")
+            if result is None and data.get("phase") == "finished":
+                result = _result_from_checkpoint(data)
+            players = data.get("players")
+            if not players and "game" in data:
+                players = (data.get("game") or {}).get("names")
+            reviewable = bool(data.get("opening_hands"))
+            games.append(
+                {
+                    "id": data.get("id") or path.stem,
+                    "mode": mode,
+                    "players": players or [],
+                    "player_count": len(players or []),
+                    "saved_at": data.get("saved_at"),
+                    "result": result,
+                    "reviewable": reviewable,
+                    "bucket": bucket,
+                }
+            )
+    games.sort(key=lambda g: g.get("saved_at") or 0, reverse=True)
+    return games
+
+
+def _result_from_checkpoint(data: dict[str, Any]) -> dict[str, Any] | None:
+    try:
+        session = session_from_checkpoint(data)
+    except (KeyError, ValueError, TypeError):
+        return None
+    g = session.game
+    winners = []
+    for place, p in enumerate(g.winners, start=1):
+        seat = next(i for i, pl in enumerate(g.players) if pl is p)
+        winners.append({"place": place, "seat": seat, "name": p.name})
+    leftover = g.remaining_players()
+    loser = None
+    if leftover:
+        lp = leftover[0]
+        seat = next(i for i, pl in enumerate(g.players) if pl is lp)
+        loser = {"seat": seat, "name": lp.name}
+    return {"finishing_order": winners, "loser": loser}
+
+
+def get_review_for_game(game_id: str) -> dict[str, Any] | None:
+    """Replay review JSON into UI frames for turn-by-turn scrubbing."""
+    session = SESSIONS.get(game_id)
+    if session is not None and session.phase == "finished":
+        names = [p.name for p in session.game.players]
+        winners = []
+        for place, p in enumerate(session.game.winners, start=1):
+            seat = next(i for i, pl in enumerate(session.game.players) if pl is p)
+            winners.append({"place": place, "seat": seat, "name": p.name})
+        leftover = session.game.remaining_players()
+        loser = None
+        if leftover:
+            lp = leftover[0]
+            seat = next(i for i, pl in enumerate(session.game.players) if pl is lp)
+            loser = {"seat": seat, "name": lp.name}
+        review = session.review or {}
+        payload = {
+            "id": session.id,
+            "mode": session.mode,
+            "players": names,
+            "result": {"finishing_order": winners, "loser": loser},
+            "saved_at": time.time(),
+            "opening_hands": review.get("opening_hands"),
+            "tricks": review.get("tricks") or [],
+            "takes": review.get("takes") or [],
+        }
+        return load_review_payload(payload)
+
+    path = find_checkpoint(game_id)
+    if path is None:
+        return None
+    try:
+        data = load_checkpoint(path)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    if "game" in data and data.get("phase") == "finished":
+        try:
+            session = session_from_checkpoint(data)
+            payload = completed_payload(session)
+            payload["saved_at"] = data.get("saved_at")
+            return load_review_payload(payload)
+        except (KeyError, ValueError, TypeError):
+            pass
+
+    if data.get("opening_hands") is not None:
+        return load_review_payload(data)
+    return None
 
 
 def get_or_load_session(game_id: str) -> GameSession | None:

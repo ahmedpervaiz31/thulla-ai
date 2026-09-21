@@ -56,3 +56,235 @@
   margin-left: -22px;
   margin-top: 8px;
 }
+
+.finish-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.finish-modal .start-btn.secondary {
+  background: #3a2a58;
+  color: var(--text);
+  box-shadow: 0 3px 0 #241838;
+}
+
+.review-nav {
+  position: fixed;
+  right: 18px;
+  bottom: 78px;
+  left: auto;
+  z-index: 35;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+  padding: 4px 5px;
+  height: 36px;
+  box-sizing: border-box;
+  background: rgba(12, 8, 24, 0.94);
+  border: 2px solid var(--orange);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  font-family: inherit;
+}
+
+.review-nav.hidden {
+  display: none;
+}
+
+.review-btn {
+  font-family: inherit;
+  box-sizing: border-box;
+  width: 30px;
+  height: 26px;
+  border: 2px solid var(--orange);
+  border-radius: 6px;
+  background: #1a1030;
+  color: var(--gold);
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  vertical-align: middle;
+}
+
+.review-btn.lobby {
+  width: auto;
+  min-width: 56px;
+  height: 26px;
+  padding: 0 8px;
+  font-size: 7px;
+  letter-spacing: 0.4px;
+  color: var(--gold);
+}
+
+.review-btn:hover:not(:disabled) {
+  background: #2a1848;
+  color: var(--orange);
+}
+
+.review-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.review-label {
+  min-width: 52px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: var(--gold);
+  font-family: inherit;
+  font-size: 7px;
+  letter-spacing: 0.4px;
+  line-height: 1;
+}
+
+.table.scratch-open .review-nav {
+  right: calc(18px + var(--scratch-panel-w));
+}
+
+@media (max-width: 720px) {
+  .review-nav {
+    bottom: 92px;
+    right: 12px;
+  }
+
+  .table.scratch-open .review-nav {
+    right: 12px;
+  }
+}
+
+/* Review hand peek */
+.hand-peek {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+}
+
+.hand-peek.hidden {
+  display: none;
+}
+
+.hand-peek.is-open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.hand-peek-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(5, 3, 12, 0.62);
+}
+
+.hand-peek-panel {
+  position: relative;
+  z-index: 1;
+  width: min(92vw, 520px);
+  max-height: min(70vh, 420px);
+  display: flex;
+  flex-direction: column;
+  background: #1c1030;
+  border: 3px solid var(--orange);
+  border-radius: 12px;
+  padding: 14px 14px 12px;
+  box-shadow: 0 0 40px rgba(0, 0, 0, 0.65);
+  transform: translateY(10px) scale(0.97);
+  opacity: 0;
+  transition:
+    transform 0.22s cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 0.2s ease;
+}
+
+.hand-peek.is-open .hand-peek-panel {
+  transform: none;
+  opacity: 1;
+}
+
+.hand-peek-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.hand-peek-title {
+  margin: 0;
+  color: var(--orange);
+  font-size: 10px;
+  letter-spacing: 0.8px;
+}
+
+.hand-peek-meta {
+  margin: 6px 0 0;
+  color: var(--gold);
+  font-size: 7px;
+}
+
+.hand-peek-close {
+  font-family: inherit;
+  font-size: 10px;
+  color: var(--muted);
+  background: #1a1030;
+  border: 2px solid #3a2a58;
+  border-radius: 6px;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.hand-peek-close:hover {
+  border-color: var(--orange);
+  color: var(--orange);
+}
+
+.hand-peek-body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  overflow: auto;
+  min-height: 0;
+  padding: 2px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--orange) #1a1030;
+}
+
+.hand-peek-body::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.hand-peek-body::-webkit-scrollbar-track {
+  background: #1a1030;
+  border-radius: 8px;
+}
+
+.hand-peek-body::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, var(--gold), var(--orange));
+  border-radius: 8px;
+}
+
+.hand-peek-empty {
+  margin: 8px 0;
+  color: var(--muted);
+  font-size: 8px;
+  width: 100%;
+  text-align: center;
+}

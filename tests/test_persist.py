@@ -67,6 +67,7 @@ class PersistRoundTripTests(unittest.TestCase):
         self.assertIn("tricks", data)
         self.assertIn("result", data)
         self.assertNotIn("game", data)
+        self.assertNotIn("ui_frames", data)
         md = persist.completed_md_path(session.mode, session.id)
         self.assertTrue(md.is_file())
         text = md.read_text(encoding="utf-8")

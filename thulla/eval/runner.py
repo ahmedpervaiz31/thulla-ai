@@ -134,12 +134,34 @@ def _seed_batches(n_games, batch_size, start_seed=0):
     return batches
 
 
+def _log_progress(label, done, total, t0, extra=""):
+    """Print progress every batch; flush so long runs show up under piping."""
+    elapsed = time.perf_counter() - t0
+    rate = done / elapsed if elapsed > 0 else 0.0
+    pct = 100.0 * done / total if total else 100.0
+    remaining = total - done
+    eta = remaining / rate if rate > 0 else float("inf")
+    eta_s = f"{eta:.0f}s" if eta < float("inf") else "?"
+    suffix = f"  {extra}" if extra else ""
+    print(
+        f"[{label}] {done}/{total} ({pct:.0f}%)  "
+        f"{rate:.1f} games/s  elapsed={elapsed:.0f}s  eta={eta_s}"
+        f"{suffix}",
+        flush=True,
+    )
+
+
 def run_calibrate(n_games=10000, workers=6, mc_samples=EVAL_MC_SAMPLES, batch_size=BATCH_SIZE):
     t0 = time.perf_counter()
     batches = _seed_batches(n_games, batch_size, start_seed=0)
     all_records = []
     seat_losses = [0] * PLAYERS
     games = 0
+    print(
+        f"[calibrate] starting {n_games} games  "
+        f"batches={len(batches)}  workers={workers}  mc_samples={mc_samples}",
+        flush=True,
+    )
 
     if workers <= 1:
         for batch in batches:
@@ -148,6 +170,9 @@ def run_calibrate(n_games=10000, workers=6, mc_samples=EVAL_MC_SAMPLES, batch_si
             for i, v in enumerate(losses):
                 seat_losses[i] += v
             games += g
+            _log_progress(
+                "calibrate", games, n_games, t0, extra=f"decisions={len(all_records)}"
+            )
     else:
         with ProcessPoolExecutor(max_workers=workers) as ex:
             futs = [ex.submit(_calibrate_batch, (batch, mc_samples)) for batch in batches]
@@ -157,6 +182,9 @@ def run_calibrate(n_games=10000, workers=6, mc_samples=EVAL_MC_SAMPLES, batch_si
                 for i, v in enumerate(losses):
                     seat_losses[i] += v
                 games += g
+                _log_progress(
+                    "calibrate", games, n_games, t0, extra=f"decisions={len(all_records)}"
+                )
 
     elapsed = time.perf_counter() - t0
     return {
@@ -188,6 +216,12 @@ def run_strength(
     batch_args = [
         (batch, mc_samples, allow_late_take, opponents) for batch in batches
     ]
+    print(
+        f"[strength] starting {n_games} games  "
+        f"batches={len(batches)}  workers={workers}  mc_samples={mc_samples}  "
+        f"opponents={opponents}  late_take={allow_late_take}",
+        flush=True,
+    )
 
     if workers <= 1:
         for args in batch_args:
@@ -196,6 +230,10 @@ def run_strength(
             games += g
             for i, v in enumerate(ranks):
                 rank_counts[i] += v
+            p_last = losses / games if games else 0.0
+            _log_progress(
+                "strength", games, n_games, t0, extra=f"P(last)~{p_last:.3f}"
+            )
     else:
         with ProcessPoolExecutor(max_workers=workers) as ex:
             futs = [ex.submit(_strength_batch, args) for args in batch_args]
@@ -205,6 +243,10 @@ def run_strength(
                 games += g
                 for i, v in enumerate(ranks):
                     rank_counts[i] += v
+                p_last = losses / games if games else 0.0
+                _log_progress(
+                    "strength", games, n_games, t0, extra=f"P(last)~{p_last:.3f}"
+                )
 
     elapsed = time.perf_counter() - t0
     rate, lo, hi = lose_rate_ci(losses, games)

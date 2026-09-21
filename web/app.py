@@ -12,7 +12,13 @@ from pydantic import BaseModel, Field
 from starlette.responses import Response
 
 from thulla.advise import advise_session
-from thulla.persist import get_or_load_session, persist_and_return, ensure_games_layout
+from thulla.persist import (
+    get_or_load_session,
+    get_review_for_game,
+    list_saved_games,
+    persist_and_return,
+    ensure_games_layout,
+)
 from thulla.session import create_session
 
 # Windows / some hosts omit .js → module MIME; browsers reject text/plain modules.
@@ -69,6 +75,22 @@ def api_create_game(body: CreateGameBody):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     return persist_and_return(session)
+
+
+@app.get("/api/games")
+def api_list_games(bucket: str = "completed"):
+    try:
+        return {"games": list_saved_games(bucket)}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.get("/api/games/{game_id}/review")
+def api_review_game(game_id: str):
+    review = get_review_for_game(game_id)
+    if review is None or not review.get("frames"):
+        raise HTTPException(status_code=404, detail="review not found")
+    return review
 
 
 @app.get("/api/games/{game_id}")

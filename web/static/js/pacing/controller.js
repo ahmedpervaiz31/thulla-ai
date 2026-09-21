@@ -5,11 +5,9 @@ import {
   DELAY_REVEAL_THULLA,
   DELAY_TAKE,
 } from "../constants/delays.js";
+import { sleep } from "../lib/async.js";
+import { isThullaReveal } from "../lib/game.js";
 import { gameStore } from "../state/gameStore.js";
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 /**
  * Client-side pace controller.
@@ -24,6 +22,7 @@ export function createPacer({ onStep }) {
   let pacing = false;
   let thinkCreditMs = 0;
   let rafId = 0;
+  let generation = 0;
 
   function clearTimer() {
     if (paceTimer) clearTimeout(paceTimer);
@@ -33,6 +32,7 @@ export function createPacer({ onStep }) {
   }
 
   function stop() {
+    generation += 1;
     clearTimer();
     pacing = false;
     thinkCreditMs = 0;
@@ -71,8 +71,7 @@ export function createPacer({ onStep }) {
     }
     let base = DELAY_TAKE;
     if (type === "reveal") {
-      const thulla = (game.last_event || "").toUpperCase().includes("THULLA");
-      base = thulla ? DELAY_REVEAL_THULLA : DELAY_REVEAL;
+      base = isThullaReveal(game) ? DELAY_REVEAL_THULLA : DELAY_REVEAL;
     }
     const credit = thinkCreditMs;
     thinkCreditMs = 0;
@@ -88,24 +87,28 @@ export function createPacer({ onStep }) {
     }
     pacing = true;
     const typeAtArm = pendingType();
+    const gen = generation;
     const wait = delayBeforeStep();
     // Double-rAF: let the browser paint whose_turn / pot before the wait.
     rafId = requestAnimationFrame(() => {
       rafId = requestAnimationFrame(() => {
         rafId = 0;
         paceTimer = setTimeout(async () => {
+          if (gen !== generation) return;
           const t0 = performance.now();
           try {
             await onStep({ quiet: true });
           } catch (err) {
             console.warn(err);
           }
+          if (gen !== generation) return;
           const elapsed = performance.now() - t0;
 
           if (typeAtArm === "play") {
             // Standardize play wall-clock; do not bleed credit into take pacing.
             const pad = Math.max(0, DELAY_PLAY_TARGET - elapsed);
             if (pad > 0) await sleep(pad);
+            if (gen !== generation) return;
             thinkCreditMs = 0;
           } else {
             thinkCreditMs = elapsed;

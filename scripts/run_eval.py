@@ -44,7 +44,8 @@ def main(argv=None):
 
     print(
         f"Thulla eval  workers={args.workers}  mc_samples={args.samples}  "
-        f"phase={args.phase}  opponents={args.opponents}  late_take={args.late_take}"
+        f"phase={args.phase}  opponents={args.opponents}  late_take={args.late_take}",
+        flush=True,
     )
 
     if args.phase in ("both", "calibrate"):

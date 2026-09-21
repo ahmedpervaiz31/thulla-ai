@@ -47,6 +47,7 @@
 }
 
 .seat-card {
+  position: relative;
   background: rgba(20, 12, 36, 0.9);
   border: 2px solid #3a2a58;
   border-radius: 10px;
@@ -148,4 +149,44 @@
 
 .table.human-mode .seat-stack.crowded .backs {
   display: none;
+}
+
+.seat-peek {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  z-index: 3;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: #ffffff;
+  cursor: pointer;
+  line-height: 0;
+}
+
+.seat-peek svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+  pointer-events: none;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.65));
+}
+
+.seat-peek:hover,
+.seat-peek.on {
+  border: none;
+  background: transparent;
+  color: var(--gold);
+}
+
+.table.review-mode .seat-card {
+  overflow: visible;
 }

@@ -1,8 +1,9 @@
 /**
  * Game-over modal with winners + loser.
+ * Can dismiss into review (stay on table) or return to lobby.
  */
-export function renderFinishModal(modalRoot, game) {
-  if (!game?.finished) {
+export function renderFinishModal(modalRoot, game, opts = {}) {
+  if (!game?.finished || opts.dismissed || opts.reviewMode) {
     modalRoot.classList.add("hidden");
     return;
   }
@@ -23,8 +24,12 @@ export function renderFinishModal(modalRoot, game) {
   modalRoot.classList.remove("hidden");
 }
 
-export function bindFinishModal(modalRoot, { onAgain }) {
+export function bindFinishModal(modalRoot, { onAgain, onReview }) {
   modalRoot
     .querySelector('[data-role="again-btn"]')
     .addEventListener("click", onAgain);
+  const reviewBtn = modalRoot.querySelector('[data-role="review-btn"]');
+  if (reviewBtn && onReview) {
+    reviewBtn.addEventListener("click", onReview);
+  }
 }

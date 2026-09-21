@@ -1,39 +1,33 @@
-"""Structured move advice using the same policy as ComputerPlayer (single pass)."""
+"""Play-card Ideal Move: bot chooser + explanation steps."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from .cards import NUMBER_CARDS, valid_moves
-from .heads_up import exact_principal_line, try_exact_with_value_from_view
-from .players import (
+from ..cards import valid_moves
+from ..heads_up import exact_principal_line, try_exact_with_value_from_view
+from ..players import (
     DEFAULT_MC_SAMPLES,
     LOOKAHEAD_MAX_UNKNOWN,
-    THULLA_P_THRESHOLD,
+    _choose_follow,
+    _choose_lead,
+    _choose_thulla,
     _lead_mc_samples,
     _lead_mc_shortlist,
     _lead_score_key,
     _play_equiv,
     _thulla_mc_samples,
-    should_cpu_take,
 )
-from .prob import (
-    LOOKAHEAD_SAMPLES,
-    TAKE_MARGIN,
-    TAKE_MARGIN_SAFE_FACE,
-    TAKE_UNKNOWN_MAX,
+from ..prob import (
+    DUMP_SAFE_P_THRESHOLD,
     THULLA_MC_MAX_CANDIDATES,
-    case_a_should_take,
-    compare_take_lose_rates,
+    any_keeper_duck_after,
     count_free_unknown,
     dump_tier,
     dump_value,
     estimate_thulla_prob,
     follow_take_safe,
-    has_dump_safe_face_lead,
-    immediate_self_thulla_prob,
     is_face,
-    is_keeper,
     score_lead_candidates,
     score_thulla_candidates,
     shortlist_thulla_candidates,
@@ -42,54 +36,12 @@ from .prob import (
 )
 
 
-def advise_session(session) -> dict[str, Any]:
-    """Return bot-policy advice for the human seat (human mode only)."""
-    if session.mode != "human":
-        return {
-            "available": False,
-            "reason": "Ideal move is only available in human vs AI.",
-        }
-    if session.phase == "finished":
-        return {"available": False, "phase": "finished", "reason": "Game over."}
-
-    pending = session.pending
-    if pending is None:
-        return {
-            "available": False,
-            "phase": session.phase,
-            "reason": "Waiting for the next decision.",
-        }
-
-    if pending["type"] == "reveal":
-        return {
-            "available": False,
-            "phase": "trick_reveal",
-            "reason": "Trick complete — step past the reveal.",
-        }
-
-    seat = pending.get("seat")
-    if pending["type"] in ("play", "take", "give") and not session.is_human(seat):
-        return {
-            "available": False,
-            "phase": session.phase,
-            "reason": "Not your turn — waiting on a CPU.",
-            "whose_turn": seat,
-        }
-
-    if pending["type"] == "play":
-        return _advise_play(session)
-    if pending["type"] == "take":
-        return _advise_take(session)
-    if pending["type"] == "give":
-        return _advise_give(session)
-
-    return {"available": False, "reason": f"No advice for pending {pending['type']}."}
-
-
-def _advise_play(session) -> dict[str, Any]:
+def advise_play(session) -> dict[str, Any]:
     g = session.game
-    seat = session.human_seat
-    assert seat is not None and session.trick is not None
+    pending = session.pending
+    assert pending is not None and pending.get("type") == "play"
+    seat = pending["seat"]
+    assert session.trick is not None
     hand = list(g.players[seat].hand)
     expected = g.expected_for_seat(session.trick, seat)
     moves = valid_moves(hand, expected)
@@ -132,11 +84,14 @@ def _advise_play(session) -> dict[str, Any]:
                 )
         card, steps, extra = _exact_advice(exact_card, kind, outcome, line)
     elif expected is None:
-        card, steps, extra = _lead(hand, moves, view, samples=DEFAULT_MC_SAMPLES)
+        card = _choose_lead(hand, moves, view, samples=DEFAULT_MC_SAMPLES)
+        steps, extra = _explain_lead(hand, moves, view, DEFAULT_MC_SAMPLES, card)
     elif must_follow:
-        card, steps, extra = _follow(hand, moves, view, samples=DEFAULT_MC_SAMPLES)
+        card = _choose_follow(hand, moves, view, samples=DEFAULT_MC_SAMPLES)
+        steps, extra = _explain_follow(hand, moves, view, DEFAULT_MC_SAMPLES, card)
     else:
-        card, steps, extra = _thulla(hand, moves, view)
+        card = _choose_thulla(hand, moves, view)
+        steps, extra = _explain_thulla(hand, moves, view, card)
 
     highest = view.current_highest
     return {
@@ -198,8 +153,8 @@ def _exact_advice(card, kind, outcome, line=None):
     return card, steps, extra
 
 
-def _lead(hand, moves, view, samples):
-    """Same logic as players._choose_lead, with a structured trace."""
+def _explain_lead(hand, moves, view, samples, choice):
+    """Explain a lead already chosen by `_choose_lead`."""
     steps = []
     seats = view.players_after_me_this_trick()
     if not seats:
@@ -229,13 +184,15 @@ def _lead(hand, moves, view, samples):
         p = suit_p(suit)
         voids = void_count_after(suit)
         safe = suit_dump_safe(
-            view, hand, suit, seats, p_thulla=p, threshold=THULLA_P_THRESHOLD
+            view, hand, suit, seats, p_thulla=p, threshold=DUMP_SAFE_P_THRESHOLD
         )
         if voids:
             note = f"{voids} known void(s) after you"
+        elif any_keeper_duck_after(view, seats, suit):
+            note = "keeper duck → treat near-void"
         elif safe:
             note = "lead dump-safe"
-        elif p < THULLA_P_THRESHOLD:
+        elif p < DUMP_SAFE_P_THRESHOLD:
             note = "risky shape/discards"
         else:
             note = "risky"
@@ -254,7 +211,6 @@ def _lead(hand, moves, view, samples):
     )
     unknown = count_free_unknown(view, hand)
     lookahead = None
-    choice = lead_opts[0] if lead_opts else moves[0]
 
     if len(lead_opts) > 1 and unknown <= LOOKAHEAD_MAX_UNKNOWN:
         shortlist = _lead_mc_shortlist(lead_opts, view)
@@ -273,9 +229,6 @@ def _lead(hand, moves, view, samples):
                     shortlist, key=lambda c: _lead_score_key(c, scores, pickup_probs)
                 )
             ]
-            choice = min(
-                shortlist, key=lambda c: _lead_score_key(c, scores, pickup_probs)
-            )
             best = lookahead[0]
             steps.append(
                 {
@@ -304,20 +257,16 @@ def _lead(hand, moves, view, samples):
                 "detail": f"Heuristic fallback ({unknown} unknowns > {LOOKAHEAD_MAX_UNKNOWN})",
             }
         )
-        from .players import _choose_lead_heuristic
-
-        choice = _choose_lead_heuristic(hand, moves, view, samples=samples)
         steps.append(
             {"label": "POLICY", "detail": f"Heuristic lead → {choice.code()}"}
         )
 
-    choice = _play_equiv(choice, hand, moves, view)
     steps.append({"label": "RECOMMEND", "detail": f"Play {choice.code()}"})
-    return choice, steps, {"suit_risks": suit_risks, "lookahead": lookahead}
+    return steps, {"suit_risks": suit_risks, "lookahead": lookahead}
 
 
-def _follow(hand, moves, view, samples):
-    """Same logic as players._choose_follow, with a structured trace."""
+def _explain_follow(hand, moves, view, samples, choice):
+    """Explain a follow already chosen by `_choose_follow`."""
     steps = []
     suit = moves[0].colour
     seats = view.players_after_me_this_trick()
@@ -326,7 +275,7 @@ def _follow(hand, moves, view, samples):
     winners = [c for c in moves if highest is None or c > highest]
     under = [c for c in moves if highest is not None and c < highest]
     take_ok = follow_take_safe(
-        view, hand, suit, seats, p_thulla=p, threshold=THULLA_P_THRESHOLD
+        view, hand, suit, seats, p_thulla=p, threshold=DUMP_SAFE_P_THRESHOLD
     )
     face_winners = [c for c in winners if is_face(c)]
 
@@ -347,9 +296,8 @@ def _follow(hand, moves, view, samples):
         }
     )
 
-    if p >= THULLA_P_THRESHOLD and highest is not None:
+    if p >= DUMP_SAFE_P_THRESHOLD and highest is not None:
         if under:
-            choice = max(under, key=lambda c: (dump_tier(c), dump_value(c), c))
             steps.append(
                 {
                     "label": "POLICY",
@@ -357,7 +305,6 @@ def _follow(hand, moves, view, samples):
                 }
             )
         else:
-            choice = min(moves)
             steps.append(
                 {
                     "label": "POLICY",
@@ -365,7 +312,6 @@ def _follow(hand, moves, view, samples):
                 }
             )
     elif face_winners and take_ok:
-        choice = max(face_winners, key=lambda c: (dump_value(c), c))
         steps.append(
             {
                 "label": "POLICY",
@@ -373,7 +319,6 @@ def _follow(hand, moves, view, samples):
             }
         )
     elif winners and take_ok:
-        choice = max(winners, key=lambda c: (dump_tier(c), dump_value(c), c))
         steps.append(
             {
                 "label": "POLICY",
@@ -381,7 +326,6 @@ def _follow(hand, moves, view, samples):
             }
         )
     elif under:
-        choice = max(under, key=lambda c: (dump_tier(c), dump_value(c), c))
         steps.append(
             {
                 "label": "POLICY",
@@ -389,7 +333,6 @@ def _follow(hand, moves, view, samples):
             }
         )
     elif winners:
-        choice = min(winners)
         steps.append(
             {
                 "label": "POLICY",
@@ -397,7 +340,6 @@ def _follow(hand, moves, view, samples):
             }
         )
     else:
-        choice = max(moves, key=lambda c: (dump_tier(c), dump_value(c), c))
         steps.append(
             {
                 "label": "POLICY",
@@ -407,32 +349,33 @@ def _follow(hand, moves, view, samples):
 
     if (
         len(hand) == 1
-        and p >= THULLA_P_THRESHOLD
+        and p >= DUMP_SAFE_P_THRESHOLD
         and highest is not None
         and choice > highest
+        and under
     ):
-        if under:
-            choice = max(under, key=lambda c: (dump_tier(c), dump_value(c), c))
-            steps.append(
-                {
-                    "label": "LAST CARD",
-                    "detail": "Sole card would take lead under high risk → duck instead",
-                }
-            )
-
-    raw = choice
-    choice = _play_equiv(choice, hand, moves, view)
-    if choice != raw:
         steps.append(
             {
-                "label": "EQUIV",
-                "detail": f"{raw.code()} → {choice.code()} (same class — play high)",
+                "label": "LAST CARD",
+                "detail": "Sole card would take lead under high risk → duck instead",
             }
         )
 
+    # Equiv raise is already applied inside the chooser; note if any equal-class mate exists.
+    raw_under = None
+    if under and choice in under:
+        raw_under = max(under, key=lambda c: (dump_tier(c), dump_value(c), c))
+        raised = _play_equiv(raw_under, hand, moves, view)
+        if raised != raw_under and raised == choice:
+            steps.append(
+                {
+                    "label": "EQUIV",
+                    "detail": f"{raw_under.code()} → {choice.code()} (same class — play high)",
+                }
+            )
+
     steps.append({"label": "RECOMMEND", "detail": f"Play {choice.code()}"})
     return (
-        choice,
         steps,
         {
             "suit_risks": [
@@ -446,8 +389,8 @@ def _follow(hand, moves, view, samples):
     )
 
 
-def _thulla(hand, moves, view):
-    """Same logic as players._choose_thulla, with a structured trace."""
+def _explain_thulla(hand, moves, view, choice):
+    """Explain a thulla dump already chosen by `_choose_thulla`."""
     steps = [
         {"label": "SITUATION", "detail": "Cannot follow — thulla dump"},
     ]
@@ -463,12 +406,15 @@ def _thulla(hand, moves, view):
     scores, lose_rates, extras = score_thulla_candidates(
         view, hand, shortlist, samples=n_samples
     )
-    choice = min(shortlist, key=lambda c: thulla_dump_score_key(c, scores, extras))
-    choice = _play_equiv(choice, hand, moves, view)
 
     ranked = sorted(shortlist, key=lambda c: thulla_dump_score_key(c, scores, extras))
     dump_rows = []
-    mode = "full lose+away+shed" if (extras.get(choice) or {}).get("full_lose") else "away+shed only"
+    choice_info = extras.get(choice) or {}
+    escape_live = bool(choice_info.get("escape_live"))
+    if choice_info.get("full_lose"):
+        mode = "full lose+away+shed" if escape_live else "full lose+liability"
+    else:
+        mode = "away+shed only" if escape_live else "liability dump"
     steps.append(
         {
             "label": "MC BUDGET",
@@ -503,7 +449,9 @@ def _thulla(hand, moves, view):
         )
 
     best_info = extras.get(choice) or {}
-    if best_info.get("p_victim_away_soon", 0) >= 0.35:
+    if not best_info.get("escape_live", True):
+        reason = "dump liability (faces > mids > keepers) — escape not live"
+    elif best_info.get("p_victim_away_soon", 0) >= 0.35:
         reason = "escape risk priced in — still best lose/away score"
     elif best_info.get("p_card_shed_soon", 0) <= 0.25:
         reason = "sticky dump — low chance victim sheds clean soon"
@@ -513,152 +461,6 @@ def _thulla(hand, moves, view):
         reason = "lowest lose-rate + victim-away score"
     steps.append({"label": "POLICY", "detail": reason})
     steps.append({"label": "RECOMMEND", "detail": f"Play {choice.code()}"})
-    return choice, steps, {"thulla_dump": dump_rows}
+    return steps, {"thulla_dump": dump_rows}
 
 
-def _advise_take(session) -> dict[str, Any]:
-    pending = session.pending
-    seat = pending["seat"]
-    g = session.game
-    hand = list(g.players[seat].hand)
-    neighbor = pending["target"]
-    n_cards = pending["n_cards"]
-    i_am_leader = pending["i_am_leader"]
-
-    remaining = [p for p in g.active_in_order(seat) if p != seat]
-    g.info.sync_hands(g.players)
-    view = g.info.view_for(seat, remaining)
-
-    steps = [
-        {
-            "label": "SITUATION",
-            "detail": (
-                f"Ask {pending['target_name']} for {n_cards} cards?"
-                + (" (you are leader)" if i_am_leader else " (not leader)")
-            ),
-        }
-    ]
-
-    if not i_am_leader:
-        steps.append(
-            {
-                "label": "POLICY",
-                "detail": "Bot never asks unless it is the take-phase leader",
-            }
-        )
-        steps.append({"label": "RECOMMEND", "detail": "Decline"})
-        return {
-            "available": True,
-            "phase": session.phase,
-            "action": "take",
-            "kind": "take",
-            "recommended": {"type": "take", "accept": False},
-            "situation": {
-                "target": neighbor,
-                "target_name": pending["target_name"],
-                "n_cards": n_cards,
-                "i_am_leader": False,
-            },
-            "steps": steps,
-        }
-
-    case_a = case_a_should_take(view, hand, neighbor)
-    safe_face = has_dump_safe_face_lead(view, hand)
-    steps.append(
-        {
-            "label": "CASE A",
-            "detail": (
-                "Soft hint: small hand + useful voids (not an auto-take)"
-                if case_a
-                else "No soft void/small-hand merge hint"
-            ),
-        }
-    )
-
-    unknown = count_free_unknown(view, hand)
-    active_n = len(view.active_indices)
-    lose_keep = lose_merge = None
-    if active_n >= 3 and unknown <= TAKE_UNKNOWN_MAX:
-        lose_keep, lose_merge = compare_take_lose_rates(
-            view, hand, neighbor, samples=40
-        )
-        margin = TAKE_MARGIN_SAFE_FACE if safe_face else TAKE_MARGIN
-        steps.append(
-            {
-                "label": "P(LAST) MC",
-                "detail": (
-                    f"{active_n} active, {unknown} unknowns — "
-                    f"lose keep {lose_keep:.0%} vs merge {lose_merge:.0%} "
-                    f"(take if merge+{margin:.0%} < keep"
-                    + ("; safer margin — face lead left)" if safe_face else ")")
-                ),
-            }
-        )
-    else:
-        steps.append(
-            {
-                "label": "P(LAST) MC",
-                "detail": (
-                    f"Skipped (need ≥3 active and unknowns ≤ {TAKE_UNKNOWN_MAX}; "
-                    f"have {active_n} active, {unknown} unknowns) → refuse"
-                ),
-            }
-        )
-
-    accept = should_cpu_take(
-        hand, view, neighbor, i_am_leader, allow_late_take=True
-    )
-
-    steps.append(
-        {
-            "label": "RECOMMEND",
-            "detail": "Ask / take" if accept else "Decline",
-        }
-    )
-    return {
-        "available": True,
-        "phase": session.phase,
-        "action": "take",
-        "kind": "take",
-        "recommended": {"type": "take", "accept": accept},
-        "situation": {
-            "target": neighbor,
-            "target_name": pending["target_name"],
-            "n_cards": n_cards,
-            "i_am_leader": True,
-            "case_a": case_a,
-            "lose_keep": lose_keep,
-            "lose_merge": lose_merge,
-        },
-        "steps": steps,
-    }
-
-
-def _advise_give(session) -> dict[str, Any]:
-    pending = session.pending
-    steps = [
-        {
-            "label": "SITUATION",
-            "detail": (
-                f"{pending['asker_name']} asks for your {pending['n_cards']} cards"
-            ),
-        },
-        {
-            "label": "POLICY",
-            "detail": "Bot always consents to give (default)",
-        },
-        {"label": "RECOMMEND", "detail": "Give"},
-    ]
-    return {
-        "available": True,
-        "phase": session.phase,
-        "action": "give",
-        "kind": "give",
-        "recommended": {"type": "give", "accept": True},
-        "situation": {
-            "asker": pending["asker"],
-            "asker_name": pending["asker_name"],
-            "n_cards": pending["n_cards"],
-        },
-        "steps": steps,
-    }

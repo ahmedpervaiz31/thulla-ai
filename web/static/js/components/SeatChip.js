@@ -1,11 +1,18 @@
 import { ordinal } from "../lib/ordinal.js";
+import { gameStore } from "../state/gameStore.js";
+
+const EYE_SVG = `
+<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+  <path fill="currentColor" d="M12 5C7 5 2.7 8.1 1 12c1.7 3.9 6 7 11 7s9.3-3.1 11-7c-1.7-3.9-6-7-11-7zm0 11.5a4.5 4.5 0 1 1 0-9 4.5 4.5 0 0 1 0 9z"/>
+  <circle fill="#120a1f" cx="12" cy="12" r="2.2"/>
+</svg>`.trim();
 
 /**
  * Opponent / AI seat chip for the arena ring.
  * @param {number} seatIdx
  * @param {object} seat
  * @param {number|null} whoseTurn
- * @param {{ turnLabel?: string }} [opts]
+ * @param {{ turnLabel?: string, reviewMode?: boolean }} [opts]
  * @returns {HTMLDivElement}
  */
 export function createSeatChip(seatIdx, seat, whoseTurn, opts = {}) {
@@ -74,6 +81,34 @@ export function applySeatChip(wrap, seatIdx, seat, whoseTurn, opts = {}) {
       backs.appendChild(b);
     }
   }
+
+  syncPeekEye(wrap, seatIdx, seat, opts.reviewMode);
+}
+
+function syncPeekEye(wrap, seatIdx, seat, reviewMode) {
+  let eye = wrap.querySelector(".seat-peek");
+  const show = Boolean(reviewMode && seat && !seat.is_human);
+  if (!show) {
+    if (eye) eye.remove();
+    return;
+  }
+  if (!eye) {
+    eye = document.createElement("button");
+    eye.type = "button";
+    eye.className = "seat-peek";
+    eye.title = "View hand";
+    eye.setAttribute("aria-label", "View hand");
+    eye.innerHTML = EYE_SVG;
+    eye.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const seat = Number(wrap.dataset.seat);
+      const cur = gameStore.getSnapshot().peekSeat;
+      gameStore.setPeekSeat(cur === seat ? null : seat);
+    });
+    wrap.appendChild(eye);
+  }
+  const { peekSeat } = gameStore.getSnapshot();
+  eye.classList.toggle("on", peekSeat === seatIdx);
 }
 
 /**
@@ -84,14 +119,13 @@ export function applySeatChip(wrap, seatIdx, seat, whoseTurn, opts = {}) {
 export function fillSeatSlot(slotEl, seatOrList, side, seats, whoseTurn, opts = {}) {
   if (seatOrList == null) {
     slotEl.innerHTML = "";
-    slotEl.classList.remove("stack-col", "stack-row", "stack-many");
     return;
   }
 
   const indices = Array.isArray(seatOrList) ? seatOrList.slice() : [seatOrList];
   if (side === "left" && indices.length > 1) indices.reverse();
 
-  const sig = `${side}|${indices.join(",")}`;
+  const sig = `${side}|${indices.join(",")}|r:${opts.reviewMode ? 1 : 0}`;
   let stack = slotEl.querySelector(".seat-stack");
   const canReuse =
     stack &&
@@ -100,7 +134,6 @@ export function fillSeatSlot(slotEl, seatOrList, side, seats, whoseTurn, opts = 
 
   if (!canReuse) {
     slotEl.innerHTML = "";
-    slotEl.classList.remove("stack-col", "stack-row", "stack-many");
     stack = document.createElement("div");
     stack.className =
       side === "top" || side === "bottom" ? "seat-stack row" : "seat-stack col";

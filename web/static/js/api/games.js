@@ -1,11 +1,12 @@
 /** Thin fetch wrappers for the Thulla game JSON API. */
 
-async function post(path, body = {}) {
-  const res = await fetch(path, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+async function request(method, path, body) {
+  const init = { method };
+  if (body !== undefined) {
+    init.headers = { "Content-Type": "application/json" };
+    init.body = JSON.stringify(body);
+  }
+  const res = await fetch(path, init);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.detail || res.statusText);
   return data;
@@ -15,40 +16,42 @@ async function post(path, body = {}) {
  * @param {{ mode: "human"|"ai", players: number }} opts
  */
 export function createGame({ mode, players }) {
-  return post("/api/games", { mode, players });
+  return request("POST", "/api/games", { mode, players });
+}
+
+/** @param {"completed"|"ongoing"} [bucket] */
+export function listGames(bucket = "completed") {
+  const q = encodeURIComponent(bucket);
+  return request("GET", `/api/games?bucket=${q}`);
 }
 
 export function getGame(gameId) {
-  return fetch(`/api/games/${gameId}`).then(async (res) => {
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.detail || res.statusText);
-    return data;
-  });
+  return request("GET", `/api/games/${gameId}`);
+}
+
+export function getGameReview(gameId) {
+  return request("GET", `/api/games/${gameId}/review`);
 }
 
 export function playCard(gameId, card) {
-  return post(`/api/games/${gameId}/play`, { card });
+  return request("POST", `/api/games/${gameId}/play`, { card });
 }
 
 export function answerTake(gameId, accept) {
-  return post(`/api/games/${gameId}/take`, { accept });
+  return request("POST", `/api/games/${gameId}/take`, { accept });
 }
 
 export function answerGive(gameId, accept) {
-  return post(`/api/games/${gameId}/give`, { accept });
+  return request("POST", `/api/games/${gameId}/give`, { accept });
 }
 
 export function stepGame(gameId) {
-  return post(`/api/games/${gameId}/step`, {});
+  return request("POST", `/api/games/${gameId}/step`, {});
 }
 
 /** Bot-policy advice for the human seat (human mode). */
 export function getAdvice(gameId) {
-  return fetch(`/api/games/${gameId}/advise`).then(async (res) => {
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.detail || res.statusText);
-    return data;
-  });
+  return request("GET", `/api/games/${gameId}/advise`);
 }
 
 /** Consent for take or give pending. */

@@ -30,6 +30,8 @@ def compact_advice(advice: dict[str, Any] | None) -> dict[str, Any] | None:
         out["suit_risks"] = advice["suit_risks"]
     if advice.get("lookahead"):
         out["lookahead"] = advice["lookahead"]
+    if advice.get("thulla_dump"):
+        out["thulla_dump"] = advice["thulla_dump"]
     if advice.get("exact_line"):
         out["exact_line"] = advice["exact_line"]
     if advice.get("exact_1v1"):
@@ -210,6 +212,7 @@ def _format_take_line(t: dict[str, Any]) -> str:
             f"- {prefix}**{t.get('target')}** refuses **{t.get('asker')}**"
         )
     adv = t.get("advice")
+    extras: list[str] = []
     if adv and adv.get("recommended"):
         rec = adv["recommended"]
         if isinstance(rec, dict) and "accept" in rec:
@@ -217,6 +220,12 @@ def _format_take_line(t: dict[str, Any]) -> str:
             followed = t.get("followed_advice")
             flag = " ✓" if followed else (" ✗" if followed is False else "")
             line += f" · Ideal: {rec_s}{flag}"
+        for step in adv.get("steps") or []:
+            label = step.get("label", "")
+            detail = step.get("detail", "")
+            extras.append(f"  - {label}: {detail}")
+    if extras:
+        return "\n".join([line] + extras)
     return line
 
 

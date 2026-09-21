@@ -1,13 +1,12 @@
 /** Tiny DOM helpers. */
 
-export function $(id) {
-  return document.getElementById(id);
+export function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text != null) node.textContent = text;
+  return node;
 }
 
-export function $$(selector, root = document) {
-  return Array.from(root.querySelectorAll(selector));
-}
-
-export function clearEl(el) {
-  if (el) el.innerHTML = "";
+export function clearEl(elNode) {
+  if (elNode) elNode.innerHTML = "";
 }

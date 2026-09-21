@@ -1,5 +1,7 @@
 from .cards import Card, cards_of_suit, create_deck
 
+_FULL_DECK = tuple(create_deck())
+
 
 class PlayerView:
     """Read-only snapshot for one player. Never includes other hidden hands."""
@@ -165,7 +167,7 @@ class PlayerView:
         for cards in self._info.known_holdings.values():
             seen.update(cards)
         seen.update(self._info.trick_cards)
-        return [c for c in create_deck() if c not in seen]
+        return [c for c in _FULL_DECK if c not in seen]
 
     def free_cards(self, my_hand):
         """Unknown cards still to assign across opponents (empty under heads-up complete info)."""

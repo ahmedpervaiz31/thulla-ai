@@ -6,7 +6,7 @@ import { gameStore } from "../state/gameStore.js";
  * @param {{ pacing?: boolean }} [opts]
  */
 export function updateControlsBar(root, opts = {}) {
-  const { game, selectedCard, autoEnabled } = gameStore.getSnapshot();
+  const { game, selectedCard, autoEnabled, reviewMode } = gameStore.getSnapshot();
   const playBtn = root.querySelector('[data-role="play-btn"]');
   const stepBtn = root.querySelector('[data-role="step-btn"]');
   const autoBtn = root.querySelector('[data-role="auto-btn"]');
@@ -16,24 +16,30 @@ export function updateControlsBar(root, opts = {}) {
 
   if (!game) return;
 
-  statusText.textContent = `STATUS: ${game.status}`;
-  statusText.title = `STATUS: ${game.status}`;
+  statusText.textContent = reviewMode
+    ? `STATUS: REVIEW`
+    : `STATUS: ${game.status}`;
+  statusText.title = statusText.textContent;
 
   const isAi = game.mode === "ai";
-  stepBtn.classList.toggle("hidden", !isAi);
-  autoBtn.classList.toggle("hidden", !isAi);
-  playBtn.classList.toggle("hidden", isAi);
-  autoBtn.classList.toggle("on", Boolean(autoEnabled));
+  const hidePlay = isAi || reviewMode;
+  stepBtn.classList.toggle("hidden", !isAi || reviewMode);
+  autoBtn.classList.toggle("hidden", !isAi || reviewMode);
+  playBtn.classList.toggle("hidden", hidePlay);
+  autoBtn.classList.toggle("on", Boolean(autoEnabled) && !reviewMode);
 
   // Suit/rank sort is human-hand only.
   if (sortSuit) sortSuit.classList.toggle("hidden", isAi);
   if (sortRank) sortRank.classList.toggle("hidden", isAi);
 
   const awaiting =
+    !reviewMode &&
     game.pending &&
     game.pending.type === "play" &&
     game.seats[game.pending.seat]?.is_human;
-  playBtn.disabled = !(awaiting && selectedCard) || Boolean(opts.pacing);
+  const busy = Boolean(opts.pacing) || Boolean(opts.stepBusy) || reviewMode;
+  playBtn.disabled = !(awaiting && selectedCard) || busy;
+  stepBtn.disabled = busy;
   // Keep label width stable — selected card lives in the hand UI.
   playBtn.textContent = "▶ PLAY SELECTED";
 }

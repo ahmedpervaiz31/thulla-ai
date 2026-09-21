@@ -1,7 +1,6 @@
 /* Right-edge public-intel scratch pad */
 
 .table {
-  --scratch-w: 0px;
   --scratch-handle: 28px;
 }
 
@@ -55,7 +54,7 @@
 .scratch-handle::before {
   content: "◀";
   display: block;
-  transition: transform 0.22s ease;
+  transition: transform var(--pad-ms) ease;
 }
 
 .scratch-open .scratch-handle::before {
@@ -71,12 +70,12 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
-  transition: width 0.22s ease, border-color 0.22s ease;
+  transition: width var(--pad-ms) ease, border-color var(--pad-ms) ease;
   box-shadow: -8px 0 24px rgba(0, 0, 0, 0.45);
 }
 
 .scratch-open .scratch-panel {
-  width: 300px;
+  width: var(--scratch-panel-w);
   border-left-color: rgba(255, 158, 0, 0.35);
 }
 
@@ -263,23 +262,23 @@
 
 /* Controls footer shifts with the pad so it isn't covered */
 .controls {
-  transition: right 0.22s ease;
+  transition: right var(--pad-ms) ease;
 }
 
 .table.scratch-open .controls {
-  right: 300px;
+  right: var(--scratch-panel-w);
 }
 
 @media (max-width: 720px) {
   .table.scratch-open {
-    padding-right: min(300px, 78vw);
+    padding-right: min(var(--scratch-panel-w), 78vw);
   }
 
   .scratch-open .scratch-panel {
-    width: min(300px, 78vw);
+    width: min(var(--scratch-panel-w), 78vw);
   }
 
   .table.scratch-open .controls {
-    right: min(300px, 78vw);
+    right: min(var(--scratch-panel-w), 78vw);
   }
 }

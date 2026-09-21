@@ -1,5 +1,5 @@
 /**
- * Hash router: #/lobby | #/table/:id
+ * Hash router: #/lobby | #/table/:id | #/review/:id
  * Shared chrome stays in the shell; pages mount into #page-root.
  */
 
@@ -12,6 +12,13 @@ export function createRouter({ root, routes, onNavigate }) {
     const path = raw.startsWith("/") ? raw : `/${raw}`;
     const parts = path.split("/").filter(Boolean);
 
+    if (parts[0] === "review" && parts[1]) {
+      return {
+        name: "table",
+        path: `/review/${parts[1]}`,
+        params: { id: parts[1], review: true },
+      };
+    }
     if (parts[0] === "table" && parts[1]) {
       return { name: "table", path: `/table/${parts[1]}`, params: { id: parts[1] } };
     }

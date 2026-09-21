@@ -4,13 +4,17 @@ from thulla.cards import Card, cards_of_suit
 from thulla.info import PublicInfo
 from thulla.players import ComputerPlayer, should_cpu_take
 from thulla.prob import (
+    KEEPER_DUCK_VOID_FLOOR,
+    THULLA_LIABILITY_WEIGHT,
     case_a_should_take,
     estimate_lead_lose_rates,
     estimate_thulla_dump_outcomes,
     estimate_thulla_prob,
     immediate_self_thulla_prob,
+    keeper_duck_near_void,
     score_lead_candidates,
     score_thulla_candidates,
+    suit_dump_safe,
     thulla_dump_score_key,
 )
 
@@ -35,6 +39,57 @@ class EstimateThullaProbTests(unittest.TestCase):
         hand = [C("2", "Spade")]
         p = estimate_thulla_prob(view, "Spade", hand, [1], samples=100)
         self.assertLess(p, 0.25)
+
+    def test_keeper_duck_floors_void_prob(self):
+        """Dumping 4S under AS is a soft near-void — floor P(thulla) for leads."""
+        info = PublicInfo(3)
+        info.hand_sizes = [10, 10, 10]
+        info.discarded = {C("A", "Spade"), C("4", "Spade"), C("J", "Spade"), C("K", "Spade")}
+        info.under_ceilings[2]["Spade"] = (C("4", "Spade"), C("A", "Spade"))
+        view = info.view_for(0, [1, 2])
+        hand = [C("Q", "Spade"), C("10", "Heart"), C("9", "Club")]
+        self.assertTrue(keeper_duck_near_void(view, 2, "Spade"))
+        p = estimate_thulla_prob(view, "Spade", hand, [1, 2], samples=80)
+        self.assertGreaterEqual(p, KEEPER_DUCK_VOID_FLOOR)
+        self.assertFalse(
+            suit_dump_safe(view, hand, "Spade", [1, 2], p_thulla=p)
+        )
+
+    def test_lead_avoids_suit_after_keeper_duck(self):
+        """After a keeper duck in Spades, prefer leading another suit over QS."""
+        info = PublicInfo(4)
+        info.active_indices = [0, 1, 2, 3]
+        info.hand_sizes = [11, 11, 11, 11]
+        info.discarded = {
+            C("A", "Spade"),
+            C("J", "Spade"),
+            C("K", "Spade"),
+            C("4", "Spade"),
+        }
+        info.under_ceilings[3]["Spade"] = (C("4", "Spade"), C("A", "Spade"))
+        view = info.view_for(1, [2, 3, 0])
+        bot = ComputerPlayer("CPU", mc_samples=48)
+        qs = C("Q", "Spade")
+        ten_h = C("10", "Heart")
+        nine_c = C("9", "Club")
+        bot.receive_cards(
+            [
+                qs,
+                C("5", "Spade"),
+                C("6", "Spade"),
+                ten_h,
+                C("8", "Heart"),
+                nine_c,
+                C("8", "Club"),
+                C("4", "Club"),
+                C("Q", "Diamond"),
+                C("6", "Heart"),
+                C("7", "Heart"),
+            ]
+        )
+        info.hand_sizes[1] = len(bot.hand)
+        played = bot.play_turn(None, view)
+        self.assertNotEqual(played.colour, "Spade", f"led {played.code()}")
 
     def test_follow_takes_ace_when_dump_safe(self):
         info = PublicInfo(2)
@@ -205,20 +260,27 @@ class EstimateThullaProbTests(unittest.TestCase):
 
     def test_lead_prefers_singleton_mid_over_keeper_and_long_club(self):
         """bf4a15ae T7/T9: 8D singleton beats 4S / 8C."""
+        import random
+
         info = PublicInfo(4)
         info.hand_sizes = [5, 5, 5, 5]
         view = info.view_for(0, [1, 2, 3])
-        bot = ComputerPlayer("CPU", mc_samples=40)
-        bot.receive_cards(
-            [
-                C("4", "Club"),
-                C("7", "Club"),
-                C("8", "Club"),
-                C("8", "Diamond"),
-                C("4", "Spade"),
-            ]
-        )
+        hand = [
+            C("4", "Club"),
+            C("7", "Club"),
+            C("8", "Club"),
+            C("8", "Diamond"),
+            C("4", "Spade"),
+        ]
+        random.seed(0)
+        scores, _, _ = score_lead_candidates(view, hand, hand, samples=96)
+        self.assertLess(scores[C("8", "Diamond")], scores[C("4", "Spade")])
+        self.assertLessEqual(scores[C("8", "Diamond")], scores[C("8", "Club")])
+        bot = ComputerPlayer("CPU", mc_samples=96)
+        bot.receive_cards(hand)
+        random.seed(0)
         played = bot.play_turn(None, view)
+        self.assertEqual(played.colour, "Diamond")
         self.assertEqual(played, C("8", "Diamond"))
 
     def test_lead_prefers_mid_spade_over_heart_keeper(self):
@@ -330,6 +392,62 @@ class EstimateThullaProbTests(unittest.TestCase):
 
 
 class TakeDecisionTests(unittest.TestCase):
+    def test_mono_suit_feeder_take_48fd9511(self):
+        """After eating C2 clubs: C2 mono-club + You club-void → ask (private merge)."""
+        from thulla.prob import mono_suit_feeder_should_take
+
+        info = PublicInfo(4)
+        info.hand_sizes = [6, 10, 4, 8]
+        info.active_indices = [0, 1, 2, 3]
+        info.voids[0].add("Club")  # You
+        info.voids[2].update({"Spade", "Heart", "Diamond"})  # CPU2 mono-club
+        view = info.view_for(1, [2, 3, 0])
+        hand = [
+            C("2", "Diamond"),
+            C("2", "Spade"),
+            C("4", "Heart"),
+            C("5", "Heart"),
+            C("6", "Club"),
+            C("7", "Diamond"),
+            C("8", "Club"),
+            C("8", "Heart"),
+            C("9", "Club"),
+            C("J", "Diamond"),
+        ]
+        self.assertTrue(mono_suit_feeder_should_take(view, hand, 2))
+        self.assertTrue(
+            should_cpu_take(hand, view, 2, i_am_leader=True, allow_late_take=True)
+        )
+        self.assertFalse(
+            should_cpu_take(hand, view, 2, i_am_leader=False, allow_late_take=True)
+        )
+
+    def test_feeder_requires_holding_their_suit(self):
+        """Mono-suit neighbor alone is not enough — don't ask eagerly."""
+        from thulla.prob import mono_suit_feeder_should_take
+
+        info = PublicInfo(4)
+        info.hand_sizes = [6, 8, 4, 8]
+        info.active_indices = [0, 1, 2, 3]
+        info.voids[0].add("Club")
+        info.voids[2].update({"Spade", "Heart", "Diamond"})
+        view = info.view_for(1, [2, 3, 0])
+        # No clubs in hand — not yet in the undercut loop with them.
+        hand = [
+            C("2", "Diamond"),
+            C("2", "Spade"),
+            C("4", "Heart"),
+            C("5", "Heart"),
+            C("7", "Diamond"),
+            C("8", "Heart"),
+            C("J", "Diamond"),
+            C("3", "Spade"),
+        ]
+        self.assertFalse(mono_suit_feeder_should_take(view, hand, 2))
+        self.assertFalse(
+            should_cpu_take(hand, view, 2, i_am_leader=True, allow_late_take=True)
+        )
+
     def test_refuse_when_two_left(self):
         info = PublicInfo(2)
         info.active_indices = [0, 1]
@@ -422,6 +540,7 @@ class ThullaDumpScoreTests(unittest.TestCase):
         )
         for c in hand:
             self.assertIn(c, scores)
+            self.assertTrue(extras[c]["escape_live"])
             self.assertAlmostEqual(
                 scores[c],
                 lose_rates[c]
@@ -429,6 +548,38 @@ class ThullaDumpScoreTests(unittest.TestCase):
                 + 0.15 * extras[c]["p_card_shed_soon"],
                 places=5,
             )
+
+    def test_midgame_thulla_dumps_face_not_keeper(self):
+        """When escape is not live, dump AH/KC — not sticky 2D."""
+        info = PublicInfo(4)
+        info.active_indices = [0, 1, 2, 3]
+        # Fat victim → escape not live by hand size; away MC stays low.
+        info.hand_sizes = [10, 8, 8, 8]
+        info.current_highest = C("Q", "Spade")
+        info.current_highest_player = 0
+        info.led_suit = "Spade"
+        info.trick_cards = [C("Q", "Spade")]
+        view = info.view_for(2, [3, 0])
+        ace = C("A", "Heart")
+        king = C("K", "Club")
+        deuce = C("2", "Diamond")
+        queen_h = C("Q", "Heart")
+        hand = [ace, king, deuce, queen_h]
+        scores, _, extras = score_thulla_candidates(
+            view, hand, hand, samples=48, full_lose=False
+        )
+        from thulla.prob import dump_value
+
+        for c in hand:
+            self.assertFalse(extras[c]["escape_live"])
+            self.assertAlmostEqual(
+                scores[c],
+                -THULLA_LIABILITY_WEIGHT * dump_value(c) / 10.0,
+                places=5,
+            )
+        choice = min(hand, key=lambda c: thulla_dump_score_key(c, scores, extras))
+        self.assertIn(choice, {ace, king, queen_h})
+        self.assertNotEqual(choice, deuce)
 
     def test_bot_prefers_void_suit_over_easy_ace(self):
         """Victim void in Clubs: sticky Club should beat cashable Ace Diamond."""
@@ -462,6 +613,7 @@ class ThullaDumpScoreTests(unittest.TestCase):
         scores, _, extras = score_thulla_candidates(
             view, hand, hand, samples=64
         )
+        self.assertTrue(extras[ace]["escape_live"])
         # Ace should look easier to shed / more escape-prone than the deuce.
         self.assertGreaterEqual(
             extras[ace]["p_card_shed_soon"] + extras[ace]["p_victim_away_soon"],

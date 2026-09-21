@@ -1,5 +1,7 @@
 import { LEAD_TO_CODE, RANK_ORDER, SUIT_NAME, SUIT_SYM } from "../constants/suits.js";
 import { parseCode, sortHand } from "../lib/cards.js";
+import { el } from "../lib/dom.js";
+import { bindEdgePad, setPadOpen } from "../lib/edgePad.js";
 import { ordinal } from "../lib/ordinal.js";
 
 const SUIT_ORDER = ["Spade", "Heart", "Club", "Diamond"];
@@ -13,60 +15,19 @@ const RANKS_ASC = Object.freeze(
  * from the play surface (pointer-events only on handle + panel).
  */
 export function bindScratchPad(root, { onToggle } = {}) {
-  const handle = root.querySelector('[data-role="scratch-toggle"]');
-  if (!handle) return;
-
-  let dragStartX = null;
-  let dragMoved = false;
-  let dragStartOpen = false;
-
-  handle.addEventListener("click", (ev) => {
-    if (dragMoved) {
-      ev.preventDefault();
-      return;
-    }
-    const open = !root.classList.contains("scratch-open");
-    onToggle?.(open);
+  bindEdgePad(root, {
+    handleRole: "scratch-toggle",
+    openClass: "scratch-open",
+    openSign: -1,
+    onToggle,
   });
-
-  const onPointerDown = (ev) => {
-    if (ev.button != null && ev.button !== 0) return;
-    dragStartX = ev.clientX;
-    dragMoved = false;
-    dragStartOpen = root.classList.contains("scratch-open");
-    handle.setPointerCapture?.(ev.pointerId);
-  };
-
-  const onPointerMove = (ev) => {
-    if (dragStartX == null) return;
-    const dx = dragStartX - ev.clientX; // pull left = positive
-    if (Math.abs(dx) > 10) dragMoved = true;
-    if (!dragStartOpen && dx > 48) {
-      dragStartOpen = true;
-      onToggle?.(true);
-    } else if (dragStartOpen && dx < -48) {
-      dragStartOpen = false;
-      onToggle?.(false);
-    }
-  };
-
-  const onPointerUp = () => {
-    dragStartX = null;
-  };
-
-  handle.addEventListener("pointerdown", onPointerDown);
-  handle.addEventListener("pointermove", onPointerMove);
-  handle.addEventListener("pointerup", onPointerUp);
-  handle.addEventListener("pointercancel", onPointerUp);
 }
 
 export function setScratchOpen(root, open) {
-  root.classList.toggle("scratch-open", open);
-  const handle = root.querySelector('[data-role="scratch-toggle"]');
-  if (handle) {
-    handle.setAttribute("aria-expanded", open ? "true" : "false");
-    handle.title = open ? "Close scratch pad" : "Open scratch pad";
-  }
+  setPadOpen(root, "scratch-open", "scratch-toggle", open, {
+    openTitle: "Open scratch pad",
+    closeTitle: "Close scratch pad",
+  });
 }
 
 /**
@@ -104,6 +65,7 @@ function infoSignature(info, seats) {
     v: info.voids,
     h: (seats || []).map((s) => [s.seat, s.hand_size, s.active, s.place]),
     u: info.under_ceilings,
+    s: info.suit_high_shown,
     t: info.trick_cards,
     c: info.complete_info || false,
   });
@@ -189,6 +151,23 @@ function sectionSeats(seats, info) {
     }
     card.appendChild(voidBlock);
 
+    const highShown = info.suit_high_shown?.[i] || {};
+    const highKeys = Object.keys(highShown);
+    if (highKeys.length) {
+      const highBlock = el("div", "scratch-block");
+      highBlock.appendChild(el("div", "scratch-label", "SUIT HIGH"));
+      const tags = el("div", "scratch-voids");
+      for (const suit of sortSuits(highKeys)) {
+        const tag = el("span", "scratch-void");
+        const code = LEAD_TO_CODE[suit];
+        tag.textContent = `${SUIT_SYM[code] || ""} ≥ ${shortCode(highShown[suit])}`;
+        if (suit === "Heart" || suit === "Diamond") tag.classList.add("red");
+        tags.appendChild(tag);
+      }
+      highBlock.appendChild(tags);
+      card.appendChild(highBlock);
+    }
+
     const ceilingKeys = Object.keys(ceilings);
     const duckLines = [];
     for (const suit of sortSuits(ceilingKeys)) {
@@ -271,11 +250,4 @@ function chip(code) {
 
 function emptyNote(text) {
   return el("p", "scratch-note", text);
-}
-
-function el(tag, className, text) {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text != null) node.textContent = text;
-  return node;
 }

@@ -1,4 +1,5 @@
 import { LEAD_TO_CODE, SUIT_NAME, SUIT_SYM } from "../constants/suits.js";
+import { isThullaReveal } from "../lib/game.js";
 import { createCardEl } from "./Card.js";
 
 /**
@@ -20,8 +21,7 @@ export function renderTrickPot(root, game, prevTrickLen) {
   potLabel.textContent = `POT: ${game.trick?.cards?.length || 0}`;
 
   const revealing = game.phase === "trick_reveal";
-  const thullaReveal =
-    revealing && (game.last_event || "").toUpperCase().includes("THULLA");
+  const thullaReveal = isThullaReveal(game);
   trickBox.classList.toggle("revealing", revealing);
   trickBox.classList.toggle("thulla", thullaReveal);
 

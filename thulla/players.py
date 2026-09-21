@@ -11,11 +11,11 @@ from .cards import (
 )
 from .heads_up import try_exact_from_view
 from .prob import (
+    DUMP_SAFE_P_THRESHOLD,
     TAKE_MARGIN,
     TAKE_MARGIN_SAFE_FACE,
     TAKE_UNKNOWN_MAX,
     THULLA_MC_MAX_CANDIDATES,
-    compare_take_lose_rates,
     count_free_unknown,
     dump_tier,
     dump_value,
@@ -31,6 +31,7 @@ from .prob import (
     suit_dump_safe,
     thulla_dump_score_key,
 )
+from .prob.take import compare_take_lose_rates, mono_suit_feeder_should_take
 
 
 class BasePlayer:
@@ -52,7 +53,7 @@ class BasePlayer:
         return False
 
     def offer_give(self, asker_name, n_cards, view=None, asker_idx=None):
-        """Victim consents to hand over cards. Default: yes."""
+        """Always give — exiting means you are not last."""
         return True
 
 
@@ -69,6 +70,7 @@ class HumanPlayer(BasePlayer):
             print("  y or n")
 
     def offer_give(self, asker_name, n_cards, view=None, asker_idx=None):
+        # CLI can still refuse; Ideal Move / bots always give.
         while True:
             ans = input(
                 f"[{self.name}] {asker_name} asks for your {n_cards} cards. Give them? [y/n] "
@@ -121,7 +123,6 @@ class HumanPlayer(BasePlayer):
         return parsed if parsed is not None else Card(number, colour)
 
 
-THULLA_P_THRESHOLD = 0.5
 DEFAULT_MC_SAMPLES = 200
 LOOKAHEAD_MAX_UNKNOWN = 52
 # Cap MC lead options early/mid (full hand still uses heuristic shortlist).
@@ -276,7 +277,7 @@ def _choose_lead_heuristic(hand, moves, view, samples=DEFAULT_MC_SAMPLES):
     safe_suits = [
         s
         for s in candidates
-        if suit_dump_safe(view, hand, s, seats, p_thulla=suit_p(s), threshold=THULLA_P_THRESHOLD)
+        if suit_dump_safe(view, hand, s, seats, p_thulla=suit_p(s), threshold=DUMP_SAFE_P_THRESHOLD)
     ]
 
     def best_in_suit(s):
@@ -301,7 +302,7 @@ def _choose_lead_heuristic(hand, moves, view, samples=DEFAULT_MC_SAMPLES):
 
         best_suit = min(candidates, key=risk_key)
         p = suit_p(best_suit)
-        if p >= THULLA_P_THRESHOLD:
+        if p >= DUMP_SAFE_P_THRESHOLD:
             choice = low_in_suit(best_suit)
         else:
             choice = best_in_suit(best_suit)
@@ -318,7 +319,7 @@ def _choose_lead_heuristic(hand, moves, view, samples=DEFAULT_MC_SAMPLES):
             )
             for c in all_opts
         }
-        if any(p < THULLA_P_THRESHOLD for p in pickups.values()):
+        if any(p < DUMP_SAFE_P_THRESHOLD for p in pickups.values()):
             choice = min(
                 all_opts,
                 key=lambda c: (
@@ -341,11 +342,11 @@ def _choose_follow(hand, moves, view, samples=DEFAULT_MC_SAMPLES):
     winners = [c for c in moves if highest is None or c > highest]
     under = [c for c in moves if highest is not None and c < highest]
     take_ok = follow_take_safe(
-        view, hand, suit, seats, p_thulla=p, threshold=THULLA_P_THRESHOLD
+        view, hand, suit, seats, p_thulla=p, threshold=DUMP_SAFE_P_THRESHOLD
     )
     face_winners = [c for c in winners if is_face(c)]
 
-    if p >= THULLA_P_THRESHOLD and highest is not None:
+    if p >= DUMP_SAFE_P_THRESHOLD and highest is not None:
         if under:
             choice = max(under, key=lambda c: (dump_tier(c), dump_value(c), c))
         else:
@@ -363,7 +364,7 @@ def _choose_follow(hand, moves, view, samples=DEFAULT_MC_SAMPLES):
 
     if (
         len(hand) == 1
-        and p >= THULLA_P_THRESHOLD
+        and p >= DUMP_SAFE_P_THRESHOLD
         and highest is not None
         and choice > highest
     ):
@@ -396,7 +397,10 @@ def _choose_thulla(hand, moves, view, samples=None):
 
 
 def should_cpu_take(hand, view, neighbor_idx, i_am_leader, allow_late_take=True):
-    """Take only when merge clearly lowers P(finish last)."""
+    """Leader-only ask: rare feeder trap, else MC must clearly prefer merge.
+
+    Give is always yes for bots. Eagerness is controlled here on the ask side.
+    """
     if view is None or neighbor_idx is None:
         return False
     active_n = len(view.active_indices)
@@ -406,6 +410,12 @@ def should_cpu_take(hand, view, neighbor_idx, i_am_leader, allow_late_take=True)
         return False
     if not allow_late_take:
         return False
+
+    # Narrow forced ask: mono-suit feeder + later void + we already hold that suit.
+    # Private take avoids leaking the rest of their hand via public thulla pickups.
+    if mono_suit_feeder_should_take(view, hand, neighbor_idx):
+        return True
+
     if count_free_unknown(view, hand) > TAKE_UNKNOWN_MAX:
         return False
 
@@ -417,6 +427,7 @@ def should_cpu_take(hand, view, neighbor_idx, i_am_leader, allow_late_take=True)
         if has_dump_safe_face_lead(view, hand)
         else TAKE_MARGIN
     )
+    # Require a clear win for merge — soft case-A alone never asks.
     return lose_merge + margin < lose_keep
 
 
@@ -443,6 +454,10 @@ class ComputerPlayer(BasePlayer):
             allow_late_take=self.allow_late_take,
         )
 
+    def offer_give(self, asker_name, n_cards, view=None, asker_idx=None):
+        """Always give — finishing out beats risking last."""
+        return True
+
 
 class RandomPlayer(BasePlayer):
     def play_turn(self, expected_cards, view=None):
@@ -453,6 +468,9 @@ class RandomPlayer(BasePlayer):
 
     def offer_take(self, target_name, n_cards, view=None, neighbor_idx=None, i_am_leader=False):
         return False
+
+    def offer_give(self, asker_name, n_cards, view=None, asker_idx=None):
+        return True
 
 
 class ScriptedPlayer(BasePlayer):

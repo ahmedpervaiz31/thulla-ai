@@ -20,12 +20,16 @@ This repo is an engine + web UI so humans can play the same rules the bots use. 
 - Led suit is Spades. Must follow if able.
 - Off-suit on the first trick is allowed and is **not** a thulla (cards still discard if everyone finishes cleanly).
 
+
+
 ### Normal tricks
 
 1. Leader plays any card → that suit is led.
 2. Others must **follow suit if they can**.
 3. If everyone follows: highest card of the led suit **wins**; pot is **discarded**; winner leads next.
 4. If someone **cannot** follow and plays off-suit → **THULLA**: the player who currently holds the highest *led-suit* card **picks up the whole pot** into their hand and leads next.
+
+
 
 ### After a trick
 
@@ -37,32 +41,38 @@ Game ends when ≤1 player still has cards.
 
 ---
 
+
+
 ## What the bot sees
 
 Bots never see hidden hands. They get a `PlayerView` over `PublicInfo`:
 
-| Hard facts | Soft hints (UI / future weights only — **not** used by bot policy or MC) |
-|------------|--------------------------------------------------------------------------|
-| Suit **voids** (failed to follow) | Duck under leader → likely no **still-unknown** ranks strictly between play and ceiling (`duck_gap_unknowns`; skips discarded/trick/known) |
-| **Discarded** clean-trick cards | Took lead in-suit → likely no higher of that suit left (`suit_high_shown`) |
-| **Known holdings** (thulla pickup / take) | |
-| Hand sizes, current trick / high | |
-| **Heads-up complete info** | With exactly 2 active, `deduced_hand` / `visible_cards` recover the opponent's full hand from deck − discarded − my hand − known − trick (**viewer-relative**; not written into shared `PublicInfo`) |
+
+| Hard facts                                | Soft hints (UI / future weights only — **not** used by bot policy or MC)                                                                                                                             |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Suit **voids** (failed to follow)         | Duck under leader → likely no **still-unknown** ranks strictly between play and ceiling (`duck_gap_unknowns`; skips discarded/trick/known)                                                           |
+| **Discarded** clean-trick cards           | Took lead in-suit → likely no higher of that suit left (`suit_high_shown`)                                                                                                                           |
+| **Known holdings** (thulla pickup / take) |                                                                                                                                                                                                      |
+| Hand sizes, current trick / high          |                                                                                                                                                                                                      |
+| **Heads-up complete info**                | With exactly 2 active, `deduced_hand` / `visible_cards` recover the opponent's full hand from deck − discarded − my hand − known − trick (**viewer-relative**; not written into shared `PublicInfo`) |
+
 
 Sampling in `prob.py` must respect **hard** constraints (+ heads-up deduction) only. Soft duck / suit-high hints must not hard-ban deals.
 
 ---
 
+
+
 ## Current bot (baseline “smart”)
 
 Not a search engine — heuristics + light Monte Carlo:
 
-- Estimate **P(someone after me is void)** in a suit (~deal samples; default 200).
+- Estimate **P(someone after me is void)** in a suit (~deal samples; default 200). Soft floor when a later seat ducked with a **keeper (2–5)** under a higher card (`KEEPER_DUCK_VOID_FLOOR`) — treat that suit as near-void for lead safety (not a hard void).
 - **Dump tiers:** faces `A/K/Q/J` → mids `6–10` → keepers `2–5` (singleton / shorter suit bias on lead).
-- Lead: among dump-safe suits (not long, not heavily discarded, no known/high void risk), pick highest tier preferring shorter holdings; never lead a keeper when any mid/face is legal. Optional lose-rate lookahead when `free_unknowns ≤ 28` (keepers dropped from opts if tier≥1 remains).
+- Lead: among dump-safe suits (not long, not heavily discarded, no known/high void risk), pick highest tier preferring shorter holdings; never lead a keeper when any mid/face is legal. When multiple lead options remain, MC lose-rate lookahead runs while `free_unknowns ≤ LOOKAHEAD_MAX_UNKNOWN` (52 in code — effectively always during normal play); otherwise falls back to heuristic lead. MC shortlist caps candidates; keepers are not filtered out of the shortlist.
 - Follow: cash best face/winner when void risk after you is low (`follow_take_safe` — void/`P(thulla)` only; length/discards do **not** block). Otherwise dump best under by tier. Hard-duck when void risk after you is high. No soft-duck sandbagging.
 - **Equivalence raise** (`cards.raise_equivalence`): after any pick, always play the **highest** of that card’s same-suit equivalence class — continuous ranks, or gaps fully accounted (discards / known / trick / own hand). Prevents gifting a low undercutter via thulla (e.g. hold 4–8 → never play the 4 when the 8 is equivalent).
-- Thulla dump: MC over a shortlist (≤4 cards); early/mid uses short-horizon away/shed only, late (≤20 unknowns) adds capped lose-rate rollouts. Scores `lose + w·away + w·shed` so easy-escape gifts lose to stickier dumps when that matters. Dedicated sample budget (8–24), never the 200 void-estimate count. Ideal Move shows rates. Always `raise_equivalence` after the pick.
+- Thulla dump: MC over a shortlist (≤4 cards); early/mid uses short-horizon away/shed only, late (≤20 unknowns) adds capped lose-rate rollouts. Sticky `away+shed` only when escape looks live (victim near empty or max away ≥ threshold); otherwise dump by liability (`faces > mids > keepers`). Dedicated sample budget (8–24), never the 200 void-estimate count. Ideal Move shows rates. Always `raise_equivalence` after the pick.
 - Take: leader only, ≥3 active; take **only** when MC says merge clearly lowers P(finish last) (`unknowns ≤ 20`); case-A void/small-hand is a soft hint only. Stronger margin if a dump-safe face lead remains.
 
 `RandomPlayer` = uniform random among legal moves (and never takes). That’s the primary strength baseline.
@@ -71,22 +81,18 @@ Ideal Move coach (`thulla/advise.py`) is the **same** policy for the human seat 
 
 ---
 
+
+
 ## Game logs (for bot review)
 
-| Path | Purpose |
-|------|---------|
-| `games/ongoing/{human_vs_ai\|ai_vs_ai}/` | Full checkpoints for resume after reload |
-| `games/completed/{human_vs_ai\|ai_vs_ai}/` | Finished games: analysis JSON + `.md` |
+
+| Path                          | Purpose     |
+| ----------------------------- | ----------- |
+| `games/ongoing/{human_vs_ai   | ai_vs_ai}/` |
+| `games/completed/{human_vs_ai | ai_vs_ai}/` |
+
 
 Completed / ongoing reviews include opening hands, trick-by-trick plays, takes, and Ideal Move snapshots (on human decisions + panel fetches). Prefer reading the `.md` for manual review.
 
 ---
 
-## How to improve (intent)
-
-Push win-rate / place distribution vs random (and later vs self) without breaking rules fidelity:
-
-- Soft hints as **weights** in deal sampling (still not hard facts)
-- 1v1 / tiny-unknown **exact** search: implemented in `thulla/heads_up.py` when `deduced_hand` succeeds and combined hands ≤ 14 cards (lead/follow/thulla); alpha-beta + node/time budget (advise reuses the search outcome; larger or timed-out 1v1 falls back to MC)
-- Smarter take/give when ≥3; multi-trick planning beyond lead lookahead
-- Keep eval reproducible via `run_eval.py`

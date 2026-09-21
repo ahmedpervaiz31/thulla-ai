@@ -14,4 +14,10 @@
   --card-ink: #1a1020;
   --heart: #c41e3a;
   --spade: #1a1020;
+  --ideal-panel-w: 240px;
+  --scratch-panel-w: 300px;
+  --pad-ms: 0.22s;
+  --pot-slot-w: 46px;
+  --pot-slot-gap: 8px;
+  --pot-row-h: 78px;
 }

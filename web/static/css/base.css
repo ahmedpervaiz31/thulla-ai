@@ -82,7 +82,13 @@ body {
 .chip,
 .play-btn,
 .start-btn,
-.action-btn {
+.action-btn,
+.review-btn,
+.history-open-btn,
+.history-item,
+.history-close-btn,
+.hand-peek-close,
+.seat-peek {
   font-family: inherit;
   cursor: pointer;
 }

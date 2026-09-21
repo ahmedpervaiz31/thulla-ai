@@ -34,12 +34,13 @@ export function renderYouBar(railRoot, seat, whoseTurn, opts = {}) {
  * Full hand rebuild (deal / sort / play). Prefer updateHandSelection for picks.
  */
 export function renderHand(handEl, { onSelect }) {
-  const { game, selectedCard, sortMode } = gameStore.getSnapshot();
+  const { game, selectedCard, sortMode, reviewMode } = gameStore.getSnapshot();
   handEl.innerHTML = "";
   if (!game || game.your_hand == null) return;
 
   const legal = new Set(game.legal_moves || []);
   const awaitingPlay =
+    !reviewMode &&
     game.pending &&
     game.pending.type === "play" &&
     game.seats[game.pending.seat]?.is_human;
@@ -128,13 +129,11 @@ export function syncSortChips(root) {
   rankBtn.classList.toggle("on", sortMode === SORT_RANK);
 }
 
-export function bindSortChips(root, { onChange }) {
+export function bindSortChips(root) {
   root.querySelector('[data-role="sort-suit"]').addEventListener("click", () => {
     gameStore.setSortMode(SORT_SUIT);
-    onChange();
   });
   root.querySelector('[data-role="sort-rank"]').addEventListener("click", () => {
     gameStore.setSortMode(SORT_RANK);
-    onChange();
   });
 }

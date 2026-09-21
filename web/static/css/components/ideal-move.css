@@ -1,7 +1,6 @@
 /* Left-edge ideal-move coach (human mode) */
 
 .table {
-  --ideal-w: 0px;
   --ideal-handle: 28px;
 }
 
@@ -68,12 +67,12 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
-  transition: width 0.22s ease, border-color 0.22s ease;
+  transition: width var(--pad-ms) ease, border-color var(--pad-ms) ease;
   box-shadow: 8px 0 24px rgba(0, 0, 0, 0.45);
 }
 
 .ideal-open .ideal-panel {
-  width: 240px;
+  width: var(--ideal-panel-w);
   border-right-color: rgba(255, 158, 0, 0.35);
 }
 
@@ -270,23 +269,23 @@
 }
 
 .table.ideal-open .controls {
-  left: 240px;
+  left: var(--ideal-panel-w);
 }
 
 .controls {
-  transition: left 0.22s ease, right 0.22s ease;
+  transition: left var(--pad-ms) ease, right var(--pad-ms) ease;
 }
 
 @media (max-width: 720px) {
   .table.ideal-open {
-    padding-left: min(240px, 70vw);
+    padding-left: min(var(--ideal-panel-w), 70vw);
   }
 
   .ideal-open .ideal-panel {
-    width: min(240px, 70vw);
+    width: min(var(--ideal-panel-w), 70vw);
   }
 
   .table.ideal-open .controls {
-    left: min(240px, 70vw);
+    left: min(var(--ideal-panel-w), 70vw);
   }
 }
