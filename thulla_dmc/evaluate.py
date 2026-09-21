@@ -1,4 +1,4 @@
-"""Evaluate a Thulla DMC checkpoint vs RandomPlayer (P(not last))."""
+"""Evaluate a Thulla DMC checkpoint vs RandomPlayer or ComputerPlayer."""
 
 from __future__ import annotations
 
@@ -11,11 +11,14 @@ import torch
 
 from thulla.cards import valid_moves
 from thulla.game import ThullaGame
-from thulla.players import BasePlayer, RandomPlayer
+from thulla.players import BasePlayer, ComputerPlayer, RandomPlayer
 
 from .encode import ASK, PASS, build_action_batch, encode_state
 from .env import FINISH_REWARDS
 from .models import Model
+
+# Faster ComputerPlayer for periodic training evals (full 200 is slow on Colab).
+EVAL_HEURISTIC_MC_SAMPLES = 50
 
 
 class DMCPlayer(BasePlayer):
@@ -101,7 +104,22 @@ class _ScriptedGame(ThullaGame):
         return trick.next_leader
 
 
-def _run_game(dmc: DMCPlayer, dmc_seat: int, seed: int | None = None) -> tuple[int, float]:
+def _make_opponent(kind: str, name: str, mc_samples: int):
+    if kind == "random":
+        return RandomPlayer(name)
+    if kind == "heuristic":
+        return ComputerPlayer(name, mc_samples=mc_samples)
+    raise ValueError(f"unknown opponent kind {kind!r}")
+
+
+def _run_game(
+    dmc: DMCPlayer,
+    dmc_seat: int,
+    seed: int | None = None,
+    *,
+    opponent: str = "random",
+    heuristic_mc_samples: int = EVAL_HEURISTIC_MC_SAMPLES,
+) -> tuple[int, float]:
     if seed is not None:
         random.seed(seed)
         np.random.seed(seed)
@@ -113,7 +131,7 @@ def _run_game(dmc: DMCPlayer, dmc_seat: int, seed: int | None = None) -> tuple[i
             dmc.hand = []
             dmc.reset_history()
         else:
-            players.append(RandomPlayer(f"R{i}"))
+            players.append(_make_opponent(opponent, f"O{i}", heuristic_mc_samples))
     game = _ScriptedGame(players, verbose=False)
     dmc.game = game
     game.shuffle_and_deal()
@@ -138,7 +156,50 @@ def _run_game(dmc: DMCPlayer, dmc_seat: int, seed: int | None = None) -> tuple[i
     return place, reward
 
 
-def evaluate(checkpoint: str, num_games: int = 400, device: str = "cpu", dmc_seat: int = 0):
+def evaluate_model(
+    model: Model,
+    num_games: int = 50,
+    *,
+    opponent: str = "random",
+    dmc_seat: int = 0,
+    seed0: int = 10_000,
+    heuristic_mc_samples: int = EVAL_HEURISTIC_MC_SAMPLES,
+) -> dict:
+    """Run eval games for an in-memory model (CPU recommended)."""
+    model.eval()
+    dmc = DMCPlayer("DMC", model, torch.device("cpu"))
+    places = []
+    rewards = []
+    for g in range(num_games):
+        place, reward = _run_game(
+            dmc,
+            dmc_seat,
+            seed=seed0 + g,
+            opponent=opponent,
+            heuristic_mc_samples=heuristic_mc_samples,
+        )
+        places.append(place)
+        rewards.append(reward)
+
+    places_a = np.array(places)
+    not_last = float(np.mean(places_a < 3))
+    return {
+        "opponent": opponent,
+        "num_games": num_games,
+        "p_not_last": not_last,
+        "p_last": float(1.0 - not_last),
+        "mean_reward": float(np.mean(rewards)),
+        "places": places_a.tolist(),
+    }
+
+
+def evaluate(
+    checkpoint: str,
+    num_games: int = 400,
+    device: str = "cpu",
+    dmc_seat: int = 0,
+    opponent: str = "random",
+):
     dev = torch.device(device if device != "cpu" and torch.cuda.is_available() else "cpu")
     model = Model(device="cpu" if dev.type == "cpu" else device)
     state = torch.load(checkpoint, map_location=dev)
@@ -146,37 +207,49 @@ def evaluate(checkpoint: str, num_games: int = 400, device: str = "cpu", dmc_sea
         model.load_state_dict(state["model_state_dict"])
     else:
         model.load_state_dict(state)
-    model.eval()
-    dmc = DMCPlayer("DMC", model, dev)
-
-    places = []
-    rewards = []
-    for g in range(num_games):
-        place, reward = _run_game(dmc, dmc_seat, seed=10_000 + g)
-        places.append(place)
-        rewards.append(reward)
-
-    places = np.array(places)
-    not_last = float(np.mean(places < 3))
-    mean_reward = float(np.mean(rewards))
-    print(f"Games: {num_games}")
-    print(f"P(not last): {not_last:.3f}  (random baseline ~0.75)")
-    print(f"P(last):     {1 - not_last:.3f}  (random baseline ~0.25)")
-    print(f"Mean reward: {mean_reward:.3f}")
-    print(f"Finish histogram (0=1st … 3=last): {np.bincount(places, minlength=4).tolist()}")
-    return {"p_not_last": not_last, "mean_reward": mean_reward, "places": places.tolist()}
+    # Always score on CPU for consistent / simpler eval.
+    cpu_model = Model(device="cpu")
+    cpu_model.load_state_dict({k: v.detach().cpu() for k, v in model.state_dict().items()})
+    result = evaluate_model(
+        cpu_model,
+        num_games,
+        opponent=opponent,
+        dmc_seat=dmc_seat,
+    )
+    baseline = "~0.75" if opponent == "random" else "vs ComputerPlayer (fair ~0.75 if equal)"
+    print(f"Opponent: {opponent}  Games: {num_games}")
+    print(f"P(not last): {result['p_not_last']:.3f}  (baseline {baseline})")
+    print(f"P(last):     {result['p_last']:.3f}")
+    print(f"Mean reward: {result['mean_reward']:.3f}")
+    print(
+        f"Finish histogram (0=1st … 3=last): "
+        f"{np.bincount(result['places'], minlength=4).tolist()}"
+    )
+    return result
 
 
 def main(argv=None):
-    p = argparse.ArgumentParser(description="Evaluate Thulla DMC vs RandomPlayer")
+    p = argparse.ArgumentParser(description="Evaluate Thulla DMC")
     p.add_argument("--checkpoint", required=True, help="Path to model.tar or player.ckpt")
     p.add_argument("--num_games", type=int, default=400)
     p.add_argument("--device", default="cpu")
     p.add_argument("--dmc_seat", type=int, default=0)
+    p.add_argument(
+        "--opponent",
+        default="random",
+        choices=["random", "heuristic"],
+        help="Other three seats: RandomPlayer or ComputerPlayer",
+    )
     args = p.parse_args(argv)
     if not os.path.exists(args.checkpoint):
         raise SystemExit(f"Missing checkpoint: {args.checkpoint}")
-    evaluate(args.checkpoint, args.num_games, args.device, args.dmc_seat)
+    evaluate(
+        args.checkpoint,
+        args.num_games,
+        args.device,
+        args.dmc_seat,
+        opponent=args.opponent,
+    )
 
 
 if __name__ == "__main__":

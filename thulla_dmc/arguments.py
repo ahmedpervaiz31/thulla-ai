@@ -13,7 +13,7 @@ def parser() -> argparse.ArgumentParser:
         "--save_interval",
         default=3,
         type=float,
-        help="Minutes between Drive/local checkpoints (default: 3)",
+        help="Minutes between Drive/local latest checkpoints (default: 3)",
     )
     p.add_argument("--load_model", action="store_true")
     p.add_argument("--disable_checkpoint", action="store_true")
@@ -22,7 +22,6 @@ def parser() -> argparse.ArgumentParser:
         default="0",
         help="'cpu' or GPU index. Colab T4: use '0'",
     )
-    # Colab T4 defaults: more CPU actors feed one GPU learner.
     p.add_argument(
         "--num_actors",
         default=6,
@@ -39,7 +38,25 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--exp_epsilon", default=0.05, type=float)
     p.add_argument("--learning_rate", default=1e-4, type=float)
     p.add_argument("--max_grad_norm", default=40.0, type=float)
-    p.add_argument("--log_interval", default=20, type=int, help="Episodes between log lines")
+    p.add_argument("--log_interval", default=25, type=int, help="Episodes between log lines")
+    p.add_argument(
+        "--eval_random_minutes",
+        default=15.0,
+        type=float,
+        help="Minutes between eval vs RandomPlayer (0=off)",
+    )
+    p.add_argument(
+        "--eval_heuristic_minutes",
+        default=30.0,
+        type=float,
+        help="Minutes between eval vs ComputerPlayer (0=off)",
+    )
+    p.add_argument(
+        "--eval_games",
+        default=50,
+        type=int,
+        help="Games per timed eval (random and heuristic)",
+    )
     p.add_argument(
         "--require_gpu",
         action="store_true",

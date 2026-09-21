@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 import timeit
 from queue import Empty
 
@@ -84,19 +85,47 @@ def _actor_loop(actor_id: int, weight_queue, out_queue, stop_queue, exp_epsilon:
             raise
 
 
-def _checkpoint_paths(flags) -> tuple[str, str, str]:
+def _checkpoint_paths(flags) -> dict[str, str]:
     root = os.path.join(flags.savedir, flags.xpid)
     os.makedirs(root, exist_ok=True)
-    main = os.path.join(root, "model.tar")
-    latest = os.path.join(root, "model_latest.tar")
-    weights = os.path.join(root, "player.ckpt")
-    return main, latest, weights
+    return {
+        "root": root,
+        "main": os.path.join(root, "model.tar"),
+        "latest": os.path.join(root, "model_latest.tar"),
+        "best": os.path.join(root, "model_best.tar"),
+        "weights": os.path.join(root, "player.ckpt"),
+        "best_weights": os.path.join(root, "player_best.ckpt"),
+        "eval_log": os.path.join(root, "eval_log.csv"),
+    }
 
 
-def save_checkpoint(flags, learner: Model, optimizer, episodes: int, stats: dict):
+_EVAL_LOG_HEADER = (
+    "timestamp,episodes,opponent,games,p_not_last,p_last,mean_reward,is_best\n"
+)
+
+
+def append_eval_log(flags, episodes: int, ev: dict, *, is_best: bool = False) -> str:
+    """Append one summary row to eval_log.csv in the checkpoint folder (Drive)."""
+    paths = _checkpoint_paths(flags)
+    path = paths["eval_log"]
+    new_file = not os.path.exists(path)
+    ts = time.strftime("%Y-%m-%d %H:%M:%S")
+    row = (
+        f"{ts},{episodes},{ev.get('opponent','')},{ev.get('num_games',0)},"
+        f"{ev.get('p_not_last',0):.4f},{ev.get('p_last',0):.4f},"
+        f"{ev.get('mean_reward',0):.4f},{int(bool(is_best))}\n"
+    )
+    with open(path, "a", encoding="utf-8") as f:
+        if new_file:
+            f.write(_EVAL_LOG_HEADER)
+        f.write(row)
+    return path
+
+
+def save_checkpoint(flags, learner: Model, optimizer, episodes: int, stats: dict, *, best: bool = False):
     if flags.disable_checkpoint:
         return
-    main, latest, weights = _checkpoint_paths(flags)
+    paths = _checkpoint_paths(flags)
     payload = {
         "model_state_dict": learner.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
@@ -104,17 +133,29 @@ def save_checkpoint(flags, learner: Model, optimizer, episodes: int, stats: dict
         "stats": stats,
         "flags": vars(flags) if hasattr(flags, "__dict__") else dict(flags),
     }
-    torch.save(payload, main)
-    torch.save(payload, latest)
-    torch.save(learner.state_dict(), weights)
-    log.info("Saved checkpoint → %s (episodes=%s)", main, episodes)
+    if best:
+        torch.save(payload, paths["best"])
+        torch.save(learner.state_dict(), paths["best_weights"])
+        log.info(
+            "Saved BEST checkpoint → %s (episodes=%s P(not last) vs heuristic=%.3f)",
+            paths["best"],
+            episodes,
+            stats.get("p_not_last_heuristic", 0.0),
+        )
+    else:
+        torch.save(payload, paths["main"])
+        torch.save(payload, paths["latest"])
+        torch.save(learner.state_dict(), paths["weights"])
+        log.info("Saved checkpoint → %s (episodes=%s)", paths["main"], episodes)
 
 
 def load_checkpoint(flags, learner: Model, optimizer, device: torch.device):
-    main, latest, _ = _checkpoint_paths(flags)
-    path = main if os.path.exists(main) else latest if os.path.exists(latest) else None
+    paths = _checkpoint_paths(flags)
+    path = paths["main"] if os.path.exists(paths["main"]) else (
+        paths["latest"] if os.path.exists(paths["latest"]) else None
+    )
     if path is None:
-        log.info("No checkpoint found under %s", os.path.join(flags.savedir, flags.xpid))
+        log.info("No checkpoint found under %s", paths["root"])
         return 0, {}
     data = torch.load(path, map_location=device)
     learner.load_state_dict(data["model_state_dict"])
@@ -163,6 +204,19 @@ def learn_batch(learner: Model, optimizer, batch: list[dict], device: torch.devi
     return float(loss.item())
 
 
+def _cpu_copy(learner: Model) -> Model:
+    cpu_model = Model(device="cpu")
+    cpu_model.load_state_dict({k: v.detach().cpu() for k, v in learner.state_dict().items()})
+    cpu_model.eval()
+    return cpu_model
+
+
+def run_timed_eval(learner: Model, opponent: str, num_games: int) -> dict:
+    from .evaluate import evaluate_model
+
+    return evaluate_model(_cpu_copy(learner), num_games, opponent=opponent)
+
+
 def train(flags=None):
     """Main entry: spawn actors, learn from episode queues, checkpoint often."""
     if flags is None:
@@ -183,20 +237,22 @@ def train(flags=None):
         torch.backends.cudnn.benchmark = True
         gpu_name = torch.cuda.get_device_name(device)
         log.info(
-            "GPU learner: %s (%s) | actors=%s (CPU self-play) | batch=%s | save every %s min",
+            "GPU learner: %s (%s) | actors=%s | batch=%s | "
+            "eval random every %s min | heuristic every %s min (%s games)",
             device,
             gpu_name,
             flags.num_actors,
             flags.batch_size,
-            flags.save_interval,
+            flags.eval_random_minutes,
+            flags.eval_heuristic_minutes,
+            flags.eval_games,
         )
     else:
         log.info(
-            "Training on %s | actors=%s | batch=%s | save every %s min",
+            "Training on %s | actors=%s | batch=%s",
             device,
             flags.num_actors,
             flags.batch_size,
-            flags.save_interval,
         )
 
     learner = Model(device="cpu" if device.type == "cpu" else flags.training_device)
@@ -204,11 +260,17 @@ def train(flags=None):
     optimizer = torch.optim.RMSprop(learner.parameters(), lr=flags.learning_rate)
 
     episodes_done = 0
-    stats = {"loss": 0.0, "mean_return": 0.0}
+    stats = {
+        "loss": 0.0,
+        "mean_return": 0.0,
+        "p_not_last_random": 0.0,
+        "p_not_last_heuristic": 0.0,
+        "best_p_not_last_heuristic": -1.0,
+    }
     if flags.load_model:
-        episodes_done, stats = load_checkpoint(flags, learner, optimizer, device)
+        episodes_done, loaded = load_checkpoint(flags, learner, optimizer, device)
+        stats.update(loaded or {})
 
-    # Share CPU weights with actors (actors always on CPU for simplicity).
     ctx_weight: mp.Queue = mp.Queue(maxsize=flags.num_actors * 2)
     out_queue: mp.Queue = mp.Queue(maxsize=64)
     stop_queue: mp.Queue = mp.Queue()
@@ -237,6 +299,8 @@ def train(flags=None):
     timer = timeit.default_timer
     last_ckpt = timer()
     last_log = episodes_done
+    last_eval_random = timer()
+    last_eval_heuristic = timer()
 
     try:
         while episodes_done < flags.total_episodes:
@@ -257,13 +321,66 @@ def train(flags=None):
 
             if episodes_done - last_log >= flags.log_interval:
                 log.info(
-                    "episodes=%s loss=%.4f mean_target=%.3f buffer=%s",
+                    "episodes=%s loss=%.4f mean_target=%.3f buffer=%s "
+                    "P(not last) random=%.3f heuristic=%.3f best_h=%.3f",
                     episodes_done,
                     stats.get("loss", 0.0),
                     stats.get("mean_return", 0.0),
                     len(buffer),
+                    stats.get("p_not_last_random", 0.0),
+                    stats.get("p_not_last_heuristic", 0.0),
+                    stats.get("best_p_not_last_heuristic", 0.0),
                 )
                 last_log = episodes_done
+
+            now = timer()
+            if (
+                flags.eval_random_minutes > 0
+                and (now - last_eval_random) >= flags.eval_random_minutes * 60
+            ):
+                ev = run_timed_eval(learner, "random", flags.eval_games)
+                stats["p_not_last_random"] = ev["p_not_last"]
+                log_path = append_eval_log(flags, episodes_done, ev, is_best=False)
+                log.info(
+                    "EVAL vs random  episodes=%s games=%s P(not last)=%.3f P(last)=%.3f "
+                    "mean_reward=%.3f (random≈0.75) → %s",
+                    episodes_done,
+                    flags.eval_games,
+                    ev["p_not_last"],
+                    ev["p_last"],
+                    ev["mean_reward"],
+                    log_path,
+                )
+                last_eval_random = timer()
+                push_weights()
+
+            if (
+                flags.eval_heuristic_minutes > 0
+                and (now - last_eval_heuristic) >= flags.eval_heuristic_minutes * 60
+            ):
+                ev = run_timed_eval(learner, "heuristic", flags.eval_games)
+                stats["p_not_last_heuristic"] = ev["p_not_last"]
+                best = float(stats.get("best_p_not_last_heuristic", -1.0))
+                is_best = ev["p_not_last"] > best
+                if is_best:
+                    stats["best_p_not_last_heuristic"] = ev["p_not_last"]
+                    save_checkpoint(
+                        flags, learner, optimizer, episodes_done, stats, best=True
+                    )
+                log_path = append_eval_log(flags, episodes_done, ev, is_best=is_best)
+                log.info(
+                    "EVAL vs heuristic  episodes=%s games=%s P(not last)=%.3f P(last)=%.3f "
+                    "mean_reward=%.3f best=%s → %s",
+                    episodes_done,
+                    flags.eval_games,
+                    ev["p_not_last"],
+                    ev["p_last"],
+                    ev["mean_reward"],
+                    is_best,
+                    log_path,
+                )
+                last_eval_heuristic = timer()
+                push_weights()
 
             if (timer() - last_ckpt) >= flags.save_interval * 60:
                 save_checkpoint(flags, learner, optimizer, episodes_done, stats)
