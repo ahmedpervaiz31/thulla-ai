@@ -6,7 +6,7 @@ import numpy as np
 import torch
 from torch import nn
 
-from .encode import X_DIM, Z_DIM, Z_ROWS
+from .encode import X_DIM, Z_DIM
 
 
 class ThullaModel(nn.Module):
@@ -18,20 +18,58 @@ class ThullaModel(nn.Module):
         self.fc3 = nn.Linear(hidden, hidden)
         self.fc4 = nn.Linear(hidden, 1)
 
-    def forward(self, z, x, return_value: bool = False, exp_epsilon: float = 0.0):
+    def _encode_state_actions(self, z, x, counts=None):
         """
-        z: (B, Z_ROWS, Z_DIM) or (Z_ROWS, Z_DIM) when scoring one state's actions
-        x: (B, X_DIM)
+        LSTM over history once per distinct state, then score each action row in x.
+
+        z:
+          - (Z_ROWS, Z_DIM): one state, x is (N_actions, X_DIM)
+          - (S, Z_ROWS, Z_DIM) with counts: S states, x rows grouped by counts
+          - (B, Z_ROWS, Z_DIM) without counts: one state per x row (learner path)
         """
-        if z.dim() == 2:
-            z = z.unsqueeze(0).expand(x.shape[0], -1, -1)
-        lstm_out, _ = self.lstm(z)
-        h = lstm_out[:, -1, :]
+        if counts is not None:
+            if z.dim() != 3:
+                raise ValueError("counts requires z shaped (S, Z_ROWS, Z_DIM)")
+            if not torch.is_tensor(counts):
+                counts = torch.as_tensor(counts, dtype=torch.long, device=z.device)
+            else:
+                counts = counts.to(device=z.device, dtype=torch.long)
+            lstm_out, _ = self.lstm(z)
+            h = lstm_out[:, -1, :]
+            h = torch.repeat_interleave(h, counts, dim=0)
+            if h.shape[0] != x.shape[0]:
+                raise ValueError(
+                    f"counts sum {h.shape[0]} != x batch {x.shape[0]}"
+                )
+        elif z.dim() == 2:
+            # Single state, many actions — avoid repeating the LSTM over identical z.
+            lstm_out, _ = self.lstm(z.unsqueeze(0))
+            h = lstm_out[:, -1, :].expand(x.shape[0], -1)
+        else:
+            if z.dim() != 3:
+                raise ValueError(f"expected z dim 2 or 3, got {z.dim()}")
+            lstm_out, _ = self.lstm(z)
+            h = lstm_out[:, -1, :]
         h = torch.cat([h, x], dim=-1)
         h = torch.relu(self.fc1(h))
         h = torch.relu(self.fc2(h))
         h = torch.relu(self.fc3(h))
-        values = self.fc4(h)
+        return self.fc4(h)
+
+    def forward(
+        self,
+        z,
+        x,
+        return_value: bool = False,
+        exp_epsilon: float = 0.0,
+        counts=None,
+    ):
+        """
+        z: (B, Z_ROWS, Z_DIM), (Z_ROWS, Z_DIM), or (S, Z_ROWS, Z_DIM) with counts
+        x: (B, X_DIM)
+        counts: optional LongTensor/list of action counts per state when z is (S, ...)
+        """
+        values = self._encode_state_actions(z, x, counts=counts)
         if return_value:
             return {"values": values}
         if exp_epsilon > 0 and np.random.rand() < exp_epsilon:
@@ -68,8 +106,10 @@ class Model:
     def load_state_dict(self, state):
         self.model.load_state_dict(state)
 
-    def forward(self, z, x, return_value=False, exp_epsilon=0.0):
-        return self.model(z, x, return_value=return_value, exp_epsilon=exp_epsilon)
+    def forward(self, z, x, return_value=False, exp_epsilon=0.0, counts=None):
+        return self.model(
+            z, x, return_value=return_value, exp_epsilon=exp_epsilon, counts=counts
+        )
 
     def get_model(self):
         return self.model

@@ -55,7 +55,7 @@ def select_actions_batched(
     exp_epsilon: float,
 ) -> list:
     """
-    One forward over concatenated legal-action rows from many envs.
+    One forward over many envs: LSTM once per state, FC over all legal actions.
     Returns one chosen action object per obs (from that obs's legal_actions).
     """
     if not obs_list:
@@ -66,12 +66,16 @@ def select_actions_batched(
         raise RuntimeError("empty legal action batch in select_actions_batched")
 
     x_np = np.concatenate([obs["x_batch"] for obs in obs_list], axis=0)
-    z_np = np.concatenate([obs["z_batch"] for obs in obs_list], axis=0)
+    # Unique history per env (not duplicated per legal action).
+    z_np = np.stack([np.asarray(obs["z"], dtype=np.float32) for obs in obs_list], axis=0)
     x = torch.from_numpy(np.ascontiguousarray(x_np)).float().to(device)
     z = torch.from_numpy(np.ascontiguousarray(z_np)).float().to(device)
+    counts = torch.tensor(sizes, dtype=torch.long, device=device)
 
     with torch.inference_mode():
-        values = model.forward(z, x, return_value=True)["values"].squeeze(-1)
+        values = model.forward(z, x, return_value=True, counts=counts)["values"].squeeze(
+            -1
+        )
 
     actions = []
     offset = 0

@@ -12,10 +12,12 @@ from thulla_dmc.models import Model
 from thulla_dmc.train import select_action, select_actions_batched
 
 
-def _fake_obs(legal_labels: list[str]) -> dict:
+def _fake_obs(legal_labels: list[str], *, seed: int = 0) -> dict:
     n = len(legal_labels)
     x_batch = np.zeros((n, X_DIM), dtype=np.float32)
-    z_batch = np.zeros((n, Z_ROWS, Z_DIM), dtype=np.float32)
+    rng = np.random.default_rng(seed)
+    z = rng.standard_normal((Z_ROWS, Z_DIM), dtype=np.float32)
+    z_batch = np.stack([z] * n, axis=0)
     for i in range(n):
         x_batch[i, X_NO_ACTION_DIM + (i % ACTION_DIM)] = 1.0
     return {
@@ -23,7 +25,7 @@ def _fake_obs(legal_labels: list[str]) -> dict:
         "x_batch": x_batch,
         "z_batch": z_batch,
         "x_no_action": np.zeros(X_NO_ACTION_DIM, dtype=np.float32),
-        "z": np.zeros((Z_ROWS, Z_DIM), dtype=np.float32),
+        "z": z,
         "position": 0,
     }
 
@@ -33,8 +35,8 @@ class BatchedSelectTests(unittest.TestCase):
         torch.manual_seed(0)
         model = Model(device="cpu")
         model.eval()
-        obs_a = _fake_obs(["a0", "a1", "a2"])
-        obs_b = _fake_obs(["b0", "b1"])
+        obs_a = _fake_obs(["a0", "a1", "a2"], seed=1)
+        obs_b = _fake_obs(["b0", "b1"], seed=2)
 
         single_a = select_action(model, obs_a, torch.device("cpu"), exp_epsilon=0.0)
         single_b = select_action(model, obs_b, torch.device("cpu"), exp_epsilon=0.0)
@@ -46,15 +48,15 @@ class BatchedSelectTests(unittest.TestCase):
     def test_batched_argmax_per_env_slice(self):
         model = Model(device="cpu")
         model.eval()
-        obs_a = _fake_obs(["a0", "a1", "a2"])
-        obs_b = _fake_obs(["b0", "b1", "b2", "b3"])
+        obs_a = _fake_obs(["a0", "a1", "a2"], seed=3)
+        obs_b = _fake_obs(["b0", "b1", "b2", "b3"], seed=4)
 
         # Prefer last of A (idx 2), second of B (idx 1) within concatenated rows.
         forced = torch.tensor(
             [0.0, 0.1, 0.9, 0.2, 1.5, 0.3, 0.4], dtype=torch.float32
         )
 
-        def _forward(z, x, return_value=False, exp_epsilon=0.0):
+        def _forward(z, x, return_value=False, exp_epsilon=0.0, counts=None):
             assert return_value
             return {"values": forced.unsqueeze(-1)}
 

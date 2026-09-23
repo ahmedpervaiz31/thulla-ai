@@ -6,6 +6,7 @@ import logging
 import os
 from pathlib import Path
 
+import numpy as np
 import torch
 
 from thulla.cards import valid_moves
@@ -170,10 +171,11 @@ class DMCPlayer(BasePlayer):
             take_phase=take_phase,
             i_am_leader=i_am_leader,
         )
-        x_batch, z_batch = build_action_batch(x_no, z, legal)
-        z_t = torch.from_numpy(z_batch).float().to(self.device)
-        x_t = torch.from_numpy(x_batch).float().to(self.device)
-        with torch.no_grad():
+        x_batch, _z_batch = build_action_batch(x_no, z, legal)
+        # Pass single-state z (2D): model runs LSTM once, then scores all actions.
+        z_t = torch.from_numpy(np.ascontiguousarray(z)).float().to(self.device)
+        x_t = torch.from_numpy(np.ascontiguousarray(x_batch)).float().to(self.device)
+        with torch.inference_mode():
             out = self.model.forward(z_t, x_t, exp_epsilon=0.0)
         idx = int(out["action"].detach().cpu().item())
         return legal[idx]
