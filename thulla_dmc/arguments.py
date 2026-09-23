@@ -26,7 +26,19 @@ def parser() -> argparse.ArgumentParser:
         "--num_actors",
         default=6,
         type=int,
-        help="Self-play actor processes (CPU). T4 Colab: 4–8 is typical",
+        help=(
+            "Self-play actor processes (CPU). CPU-only Colab: 2–3; "
+            "T4 learner + CPU actors: 4–8"
+        ),
+    )
+    p.add_argument(
+        "--actor_envs",
+        default=8,
+        type=int,
+        help=(
+            "Parallel envs per actor; one batched Torch forward across all "
+            "pending decisions (CPU throughput). Try 4–16."
+        ),
     )
     p.add_argument(
         "--batch_size",

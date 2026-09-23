@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import random as _random
 import time
 import timeit
 from queue import Empty
@@ -26,6 +27,16 @@ if not log.handlers:
     log.propagate = False
 
 
+def _limit_torch_threads() -> None:
+    """Avoid OpenMP oversubscription when many actor processes share a CPU."""
+    torch.set_num_threads(1)
+    try:
+        torch.set_num_interop_threads(1)
+    except RuntimeError:
+        # Already set in this process (e.g. re-entry); ignore.
+        pass
+
+
 def _device_of(flags) -> torch.device:
     if flags.training_device == "cpu" or not torch.cuda.is_available():
         return torch.device("cpu")
@@ -33,30 +44,67 @@ def _device_of(flags) -> torch.device:
 
 
 def select_action(model: Model, obs: dict, device: torch.device, exp_epsilon: float):
-    z = torch.from_numpy(obs["z_batch"]).float().to(device)
-    x = torch.from_numpy(obs["x_batch"]).float().to(device)
-    with torch.no_grad():
-        out = model.forward(z, x, exp_epsilon=exp_epsilon)
-    idx = int(out["action"].detach().cpu().item())
-    return obs["legal_actions"][idx], idx
+    """Score legal actions for one state (used by single-env / eval paths)."""
+    return select_actions_batched(model, [obs], device, exp_epsilon)[0]
+
+
+def select_actions_batched(
+    model: Model,
+    obs_list: list[dict],
+    device: torch.device,
+    exp_epsilon: float,
+) -> list:
+    """
+    One forward over concatenated legal-action rows from many envs.
+    Returns one chosen action object per obs (from that obs's legal_actions).
+    """
+    if not obs_list:
+        return []
+
+    sizes = [int(obs["x_batch"].shape[0]) for obs in obs_list]
+    if any(n <= 0 for n in sizes):
+        raise RuntimeError("empty legal action batch in select_actions_batched")
+
+    x_np = np.concatenate([obs["x_batch"] for obs in obs_list], axis=0)
+    z_np = np.concatenate([obs["z_batch"] for obs in obs_list], axis=0)
+    x = torch.from_numpy(np.ascontiguousarray(x_np)).float().to(device)
+    z = torch.from_numpy(np.ascontiguousarray(z_np)).float().to(device)
+
+    with torch.inference_mode():
+        values = model.forward(z, x, return_value=True)["values"].squeeze(-1)
+
+    actions = []
+    offset = 0
+    for obs, n in zip(obs_list, sizes):
+        chunk = values[offset : offset + n]
+        if exp_epsilon > 0 and _random.random() < exp_epsilon:
+            idx = _random.randrange(n)
+        else:
+            idx = int(torch.argmax(chunk).item())
+        actions.append(obs["legal_actions"][idx])
+        offset += n
+    return actions
+
+
+def _reset_env(env):
+    from .rust_env import RustThullaEnv
+
+    if isinstance(env, RustThullaEnv):
+        return env.reset(seed=_random.getrandbits(63))
+    return env.reset()
 
 
 def play_episode(model: Model, device: torch.device, exp_epsilon: float) -> list[dict]:
     """Play one self-play game; return transitions with finish-rank targets."""
-    import random as _random
-
-    from .rust_env import RustThullaEnv, make_env
+    from .rust_env import make_env
 
     env = make_env(prefer_rust=True)
-    if isinstance(env, RustThullaEnv):
-        obs = env.reset(seed=_random.getrandbits(63))
-    else:
-        obs = env.reset()
+    obs = _reset_env(env)
     steps: list[dict] = []
 
     while True:
         seat = obs["position"]
-        action, _ = select_action(model, obs, device, exp_epsilon)
+        action = select_action(model, obs, device, exp_epsilon)
         transition = {
             "seat": seat,
             "x_no_action": obs["x_no_action"].copy(),
@@ -71,11 +119,27 @@ def play_episode(model: Model, device: torch.device, exp_epsilon: float) -> list
             return steps
 
 
-def _actor_loop(actor_id: int, weight_queue, out_queue, stop_queue, exp_epsilon: float):
-    """Actor process: pull latest CPU weights, play episodes, push transitions."""
+def _actor_loop(
+    actor_id: int,
+    weight_queue,
+    out_queue,
+    stop_queue,
+    exp_epsilon: float,
+    actor_envs: int,
+):
+    """Actor process: N parallel envs, batched CPU inference, push finished games."""
+    _limit_torch_threads()
     device = torch.device("cpu")
     model = Model(device="cpu")
     model.eval()
+
+    from .rust_env import make_env
+
+    n_envs = max(1, int(actor_envs))
+    envs = [make_env(prefer_rust=True) for _ in range(n_envs)]
+    steps: list[list[dict]] = [[] for _ in range(n_envs)]
+    obs_list = [_reset_env(env) for env in envs]
+
     while stop_queue.empty():
         try:
             while True:
@@ -84,8 +148,24 @@ def _actor_loop(actor_id: int, weight_queue, out_queue, stop_queue, exp_epsilon:
         except Empty:
             pass
         try:
-            steps = play_episode(model, device, exp_epsilon)
-            out_queue.put(steps)
+            actions = select_actions_batched(model, obs_list, device, exp_epsilon)
+            for i, (env, action, obs) in enumerate(zip(envs, actions, obs_list)):
+                transition = {
+                    "seat": obs["position"],
+                    "x_no_action": obs["x_no_action"].copy(),
+                    "z": obs["z"].copy(),
+                    "action": env.encode_played_action(action).copy(),
+                }
+                new_obs, rewards, done, _info = env.step(action)
+                steps[i].append(transition)
+                if done:
+                    for t in steps[i]:
+                        t["target"] = float(rewards[t["seat"]])
+                    out_queue.put(steps[i])
+                    steps[i] = []
+                    obs_list[i] = _reset_env(env)
+                else:
+                    obs_list[i] = new_obs
         except Exception as exc:
             log.error("Actor %s failed: %s", actor_id, exc)
             raise
@@ -244,22 +324,26 @@ def train(flags=None):
     except RuntimeError:
         pass
 
+    _limit_torch_threads()
+
     if getattr(flags, "require_gpu", False) and not torch.cuda.is_available():
         raise RuntimeError(
             "CUDA required (--require_gpu) but not available. "
             "In Colab: Runtime → Change runtime type → T4 GPU."
         )
 
+    actor_envs = max(1, int(getattr(flags, "actor_envs", 8)))
     device = _device_of(flags)
     if device.type == "cuda":
         torch.backends.cudnn.benchmark = True
         gpu_name = torch.cuda.get_device_name(device)
         log.info(
-            "GPU learner: %s (%s) | actors=%s | batch=%s | "
+            "GPU learner: %s (%s) | actors=%s envs/actor=%s | batch=%s | "
             "eval random every %s min | heuristic every %s min (%s games, seed=%s)",
             device,
             gpu_name,
             flags.num_actors,
+            actor_envs,
             flags.batch_size,
             flags.eval_random_minutes,
             flags.eval_heuristic_minutes,
@@ -268,9 +352,10 @@ def train(flags=None):
         )
     else:
         log.info(
-            "Training on %s | actors=%s | batch=%s | eval_seed=%s",
+            "Training on %s | actors=%s envs/actor=%s | batch=%s | eval_seed=%s",
             device,
             flags.num_actors,
+            actor_envs,
             flags.batch_size,
             getattr(flags, "eval_seed", 10_000),
         )
@@ -308,7 +393,14 @@ def train(flags=None):
     for i in range(flags.num_actors):
         p = mp.Process(
             target=_actor_loop,
-            args=(i, ctx_weight, out_queue, stop_queue, flags.exp_epsilon),
+            args=(
+                i,
+                ctx_weight,
+                out_queue,
+                stop_queue,
+                flags.exp_epsilon,
+                actor_envs,
+            ),
             daemon=True,
         )
         p.start()
