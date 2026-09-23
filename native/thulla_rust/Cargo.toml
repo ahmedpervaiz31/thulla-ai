@@ -1,0 +1,15 @@
+[package]
+name = "thulla_rust"
+version = "0.1.0"
+edition = "2021"
+description = "Fast Thulla engine + DMC observation encode (PyO3)"
+
+[lib]
+name = "thulla_rust"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.22", features = ["extension-module"] }
+numpy = "0.22"
+rand = "0.8"
+rand_chacha = "0.3"

@@ -58,6 +58,15 @@ def parser() -> argparse.ArgumentParser:
         help="Games per timed eval (random and heuristic)",
     )
     p.add_argument(
+        "--eval_seed",
+        default=10_000,
+        type=int,
+        help=(
+            "Fixed seed bank base for timed evals. Game i uses eval_seed+i "
+            "(matches historical seed0+g). Same deals across checkpoints."
+        ),
+    )
+    p.add_argument(
         "--require_gpu",
         action="store_true",
         help="Abort if CUDA is unavailable (recommended on Colab T4)",

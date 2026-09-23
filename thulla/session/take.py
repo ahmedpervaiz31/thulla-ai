@@ -98,6 +98,13 @@ class TakeMixin:
         n_cards = self.pending["n_cards"]
         ctx = self.game.take_offer_context(self.take_leader, seat)
         view = ctx[2] if ctx else None
+        try:
+            from thulla_dmc.player import DMCPlayer
+
+            if isinstance(player, DMCPlayer):
+                player.bind(self.game, getattr(self, "dmc_play_history", []))
+        except ImportError:
+            pass
         return bool(
             player.offer_take(
                 self.game.players[target].name,

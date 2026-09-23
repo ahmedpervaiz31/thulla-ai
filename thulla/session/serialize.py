@@ -88,6 +88,7 @@ class SerializeMixin:
         return {
             "id": self.id,
             "mode": self.mode,
+            "bot_kind": getattr(self, "bot_kind", "heuristic"),
             "phase": self.phase,
             "status": self.status,
             "trick_number": g.trick_number,

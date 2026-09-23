@@ -11,9 +11,9 @@ from typing import Any
 from .cards import Card, parse_card
 from .game import TrickState
 from .info import PublicInfo
-from .players import ComputerPlayer
 from .review import completed_markdown, completed_payload, new_review
 from .session import GameSession, InteractiveSeat, SESSIONS
+from .session.core import _bind_dmc_bots, _make_cpu
 from .ui_frames import load_review_payload
 
 # games/ongoing|completed/{human_vs_ai|ai_vs_ai}/{game_id}.json
@@ -232,6 +232,10 @@ def session_checkpoint(session: GameSession) -> dict[str, Any]:
         "review": getattr(session, "review", None),
         "last_advice": getattr(session, "last_advice", None),
         "review_trick": getattr(session, "_review_trick", None),
+        "bot_kind": getattr(session, "bot_kind", "heuristic"),
+        "dmc_play_history": [
+            c.code() for c in getattr(session, "dmc_play_history", []) or []
+        ],
     }
 
 
@@ -289,19 +293,24 @@ def session_from_checkpoint(data: dict[str, Any]) -> GameSession:
     n = gdata["player_count"]
     session = GameSession(mode, n, game_id=data["id"], deal=False)
 
-    # Rebuild seats with saved names
+    # Rebuild seats with saved names (DMC when checkpoint available + 4 seats)
     names = gdata.get("names") or []
     if mode == "human":
         players = [InteractiveSeat(names[0] if names else "You")]
         for i in range(1, n):
             name = names[i] if i < len(names) else f"CPU{i}"
-            players.append(ComputerPlayer(name))
+            players.append(_make_cpu(name, n))
     else:
         players = [
-            ComputerPlayer(names[i] if i < len(names) else f"CPU{i + 1}")
+            _make_cpu(names[i] if i < len(names) else f"CPU{i + 1}", n)
             for i in range(n)
         ]
     session.game.players = players
+    session.game.player_cnt = n
+
+    hist_codes = data.get("dmc_play_history") or []
+    session.dmc_play_history = _parse_codes(hist_codes)
+    _bind_dmc_bots(session)
 
     hands = [_parse_codes(h) for h in gdata["hands"]]
     for p, hand in zip(players, hands):

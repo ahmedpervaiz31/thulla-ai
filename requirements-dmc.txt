@@ -1,4 +1,7 @@
-# Optional deps for Thulla DMC training / eval (Colab or local GPU).
-# Web UI does not need these.
+# Optional deps for Thulla DMC training / eval / app bot.
+# Web UI uses ComputerPlayer without these; with them + checkpoints/model_best.tar
+# the app plays the DMC policy on 4-player tables.
 torch>=2.0.0
 numpy>=1.24.0
+# Native engine+encode (optional acceleration). Build: see native/thulla_rust/README.md
+maturin>=1.5

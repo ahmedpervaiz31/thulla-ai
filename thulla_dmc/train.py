@@ -15,7 +15,6 @@ from torch import nn
 
 from .arguments import parse_args
 from .encode import X_DIM, Z_DIM, Z_ROWS
-from .env import ThullaEnv
 from .models import Model
 
 log = logging.getLogger("thulla_dmc")
@@ -44,8 +43,15 @@ def select_action(model: Model, obs: dict, device: torch.device, exp_epsilon: fl
 
 def play_episode(model: Model, device: torch.device, exp_epsilon: float) -> list[dict]:
     """Play one self-play game; return transitions with finish-rank targets."""
-    env = ThullaEnv()
-    obs = env.reset()
+    import random as _random
+
+    from .rust_env import RustThullaEnv, make_env
+
+    env = make_env(prefer_rust=True)
+    if isinstance(env, RustThullaEnv):
+        obs = env.reset(seed=_random.getrandbits(63))
+    else:
+        obs = env.reset()
     steps: list[dict] = []
 
     while True:
@@ -100,7 +106,7 @@ def _checkpoint_paths(flags) -> dict[str, str]:
 
 
 _EVAL_LOG_HEADER = (
-    "timestamp,episodes,opponent,games,p_not_last,p_last,mean_reward,is_best\n"
+    "timestamp,episodes,opponent,games,p_not_last,p_last,mean_reward,is_best,eval_seed\n"
 )
 
 
@@ -110,10 +116,11 @@ def append_eval_log(flags, episodes: int, ev: dict, *, is_best: bool = False) ->
     path = paths["eval_log"]
     new_file = not os.path.exists(path)
     ts = time.strftime("%Y-%m-%d %H:%M:%S")
+    seed = ev.get("eval_seed", getattr(flags, "eval_seed", ""))
     row = (
         f"{ts},{episodes},{ev.get('opponent','')},{ev.get('num_games',0)},"
         f"{ev.get('p_not_last',0):.4f},{ev.get('p_last',0):.4f},"
-        f"{ev.get('mean_reward',0):.4f},{int(bool(is_best))}\n"
+        f"{ev.get('mean_reward',0):.4f},{int(bool(is_best))},{seed}\n"
     )
     with open(path, "a", encoding="utf-8") as f:
         if new_file:
@@ -211,10 +218,21 @@ def _cpu_copy(learner: Model) -> Model:
     return cpu_model
 
 
-def run_timed_eval(learner: Model, opponent: str, num_games: int) -> dict:
+def run_timed_eval(
+    learner: Model,
+    opponent: str,
+    num_games: int,
+    *,
+    eval_seed: int = 10_000,
+) -> dict:
     from .evaluate import evaluate_model
 
-    return evaluate_model(_cpu_copy(learner), num_games, opponent=opponent)
+    return evaluate_model(
+        _cpu_copy(learner),
+        num_games,
+        opponent=opponent,
+        eval_seed=eval_seed,
+    )
 
 
 def train(flags=None):
@@ -238,7 +256,7 @@ def train(flags=None):
         gpu_name = torch.cuda.get_device_name(device)
         log.info(
             "GPU learner: %s (%s) | actors=%s | batch=%s | "
-            "eval random every %s min | heuristic every %s min (%s games)",
+            "eval random every %s min | heuristic every %s min (%s games, seed=%s)",
             device,
             gpu_name,
             flags.num_actors,
@@ -246,13 +264,15 @@ def train(flags=None):
             flags.eval_random_minutes,
             flags.eval_heuristic_minutes,
             flags.eval_games,
+            getattr(flags, "eval_seed", 10_000),
         )
     else:
         log.info(
-            "Training on %s | actors=%s | batch=%s",
+            "Training on %s | actors=%s | batch=%s | eval_seed=%s",
             device,
             flags.num_actors,
             flags.batch_size,
+            getattr(flags, "eval_seed", 10_000),
         )
 
     learner = Model(device="cpu" if device.type == "cpu" else flags.training_device)
@@ -338,14 +358,20 @@ def train(flags=None):
                 flags.eval_random_minutes > 0
                 and (now - last_eval_random) >= flags.eval_random_minutes * 60
             ):
-                ev = run_timed_eval(learner, "random", flags.eval_games)
+                ev = run_timed_eval(
+                    learner,
+                    "random",
+                    flags.eval_games,
+                    eval_seed=getattr(flags, "eval_seed", 10_000),
+                )
                 stats["p_not_last_random"] = ev["p_not_last"]
                 log_path = append_eval_log(flags, episodes_done, ev, is_best=False)
                 log.info(
-                    "EVAL vs random  episodes=%s games=%s P(not last)=%.3f P(last)=%.3f "
+                    "EVAL vs random  episodes=%s games=%s seed=%s P(not last)=%.3f P(last)=%.3f "
                     "mean_reward=%.3f (random≈0.75) → %s",
                     episodes_done,
                     flags.eval_games,
+                    ev.get("eval_seed", getattr(flags, "eval_seed", "")),
                     ev["p_not_last"],
                     ev["p_last"],
                     ev["mean_reward"],
@@ -358,7 +384,12 @@ def train(flags=None):
                 flags.eval_heuristic_minutes > 0
                 and (now - last_eval_heuristic) >= flags.eval_heuristic_minutes * 60
             ):
-                ev = run_timed_eval(learner, "heuristic", flags.eval_games)
+                ev = run_timed_eval(
+                    learner,
+                    "heuristic",
+                    flags.eval_games,
+                    eval_seed=getattr(flags, "eval_seed", 10_000),
+                )
                 stats["p_not_last_heuristic"] = ev["p_not_last"]
                 best = float(stats.get("best_p_not_last_heuristic", -1.0))
                 is_best = ev["p_not_last"] > best
@@ -369,10 +400,11 @@ def train(flags=None):
                     )
                 log_path = append_eval_log(flags, episodes_done, ev, is_best=is_best)
                 log.info(
-                    "EVAL vs heuristic  episodes=%s games=%s P(not last)=%.3f P(last)=%.3f "
+                    "EVAL vs heuristic  episodes=%s games=%s seed=%s P(not last)=%.3f P(last)=%.3f "
                     "mean_reward=%.3f best=%s → %s",
                     episodes_done,
                     flags.eval_games,
+                    ev.get("eval_seed", getattr(flags, "eval_seed", "")),
                     ev["p_not_last"],
                     ev["p_last"],
                     ev["mean_reward"],

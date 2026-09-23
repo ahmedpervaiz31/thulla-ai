@@ -15,6 +15,44 @@ from .take import TakeMixin
 from .trick import TrickMixin
 
 
+def _make_cpu(name: str, player_count: int):
+    """Prefer DMC (model_best) for 4-player tables; else heuristic ComputerPlayer."""
+    try:
+        from thulla_dmc.player import DMCPlayer, make_app_bot
+
+        bot = make_app_bot(name, player_count)
+        if isinstance(bot, DMCPlayer):
+            if name.startswith("CPU"):
+                bot.name = name.replace("CPU", "DMC", 1)
+        elif name.startswith("DMC"):
+            # Checkpoint missing after resume — keep policy label honest.
+            bot.name = name.replace("DMC", "CPU", 1)
+        return bot
+    except ImportError:
+        return ComputerPlayer(
+            name.replace("DMC", "CPU", 1) if name.startswith("DMC") else name
+        )
+
+
+def _bind_dmc_bots(session: "GameSession"):
+    """Share one play-history list across all DMC seats."""
+    try:
+        from thulla_dmc.player import DMCPlayer
+    except ImportError:
+        session.bot_kind = "heuristic"
+        return
+    history = getattr(session, "dmc_play_history", None)
+    if history is None:
+        history = []
+        session.dmc_play_history = history
+    any_dmc = False
+    for p in session.game.players:
+        if isinstance(p, DMCPlayer):
+            p.bind(session.game, history)
+            any_dmc = True
+    session.bot_kind = "dmc" if any_dmc else "heuristic"
+
+
 class GameSession(TrickMixin, TakeMixin, AdvanceMixin, SerializeMixin):
     """
     Drives Thulla one decision at a time.
@@ -38,15 +76,20 @@ class GameSession(TrickMixin, TakeMixin, AdvanceMixin, SerializeMixin):
         self.id = game_id or str(uuid.uuid4())
         self.mode = mode
         self.human_seat = 0 if mode == "human" else None
+        self.dmc_play_history: list = []
+        self.bot_kind = "heuristic"
 
         if mode == "human":
             players = [InteractiveSeat("You")]
             for i in range(1, player_count):
-                players.append(ComputerPlayer(f"CPU{i}"))
+                players.append(_make_cpu(f"CPU{i}", player_count))
         else:
-            players = [ComputerPlayer(f"CPU{i}") for i in range(1, player_count + 1)]
+            players = [
+                _make_cpu(f"CPU{i}", player_count) for i in range(1, player_count + 1)
+            ]
 
         self.game = ThullaGame(players, verbose=False)
+        _bind_dmc_bots(self)
         self.phase = "first_trick"
         self.leader: int | None = None
         self.trick: TrickState | None = None

@@ -9,76 +9,38 @@ import random
 import numpy as np
 import torch
 
-from thulla.cards import valid_moves
 from thulla.game import ThullaGame
-from thulla.players import BasePlayer, ComputerPlayer, RandomPlayer
+from thulla.players import ComputerPlayer, RandomPlayer
 
-from .encode import ASK, PASS, build_action_batch, encode_state
 from .env import FINISH_REWARDS
 from .models import Model
+from .player import DMCPlayer, load_model
 
 # Faster ComputerPlayer for periodic training evals (full 200 is slow on Colab).
 EVAL_HEURISTIC_MC_SAMPLES = 50
 
+# Fixed deal/MC bank so checkpoint A vs B compares the same games (apples-to-apples).
+# Game i → eval_seed + i (same formula historically used as seed0+g in training evals).
+DEFAULT_EVAL_SEED = 10_000
 
-class DMCPlayer(BasePlayer):
-    """Greedy DMC policy for evaluation / mixed games (cards + ASK/PASS)."""
 
-    def __init__(self, name, model: Model, device: torch.device):
-        super().__init__(name)
-        self.model = model
-        self.device = device
-        self.play_history = []
-        self.game: ThullaGame | None = None
+def eval_game_seeds(
+    num_games: int,
+    *,
+    opponent: str = "random",
+    eval_seed: int = DEFAULT_EVAL_SEED,
+) -> list[int]:
+    """Deterministic seed list for timed / CLI evals (opponent unused; kept for API clarity)."""
+    del opponent  # banks are shared; opponents diverge after the deal
+    base = int(eval_seed)
+    return [base + g for g in range(int(num_games))]
 
-    def reset_history(self):
-        self.play_history = []
 
-    def note_played(self, card):
-        self.play_history.append(card)
-
-    def play_turn(self, expected_cards, view=None):
-        raise RuntimeError("Use choose() via evaluate harness")
-
-    def _pick(self, legal, *, trick, take_phase: bool, i_am_leader: bool = False):
-        assert self.game is not None
-        seat = self.game.players.index(self)
-        x_no, z = encode_state(
-            self.game,
-            seat,
-            trick,
-            self.play_history,
-            take_phase=take_phase,
-            i_am_leader=i_am_leader,
-        )
-        x_batch, z_batch = build_action_batch(x_no, z, legal)
-        z_t = torch.from_numpy(z_batch).float().to(self.device)
-        x_t = torch.from_numpy(x_batch).float().to(self.device)
-        with torch.no_grad():
-            out = self.model.forward(z_t, x_t, exp_epsilon=0.0)
-        idx = int(out["action"].detach().cpu().item())
-        return legal[idx]
-
-    def choose(self, game, trick, expected_cards):
-        self.game = game
-        legal = valid_moves(self.hand, expected_cards)
-        card = self._pick(legal, trick=trick, take_phase=False)
-        self.hand.remove(card)
-        return card
-
-    def offer_take(self, target_name, n_cards, view=None, neighbor_idx=None, i_am_leader=False):
-        if self.game is None:
-            return False
-        action = self._pick(
-            [ASK, PASS],
-            trick=None,
-            take_phase=True,
-            i_am_leader=bool(i_am_leader),
-        )
-        return action == ASK
-
-    def offer_give(self, asker_name, n_cards, view=None, asker_idx=None):
-        return True
+def _seed_everything(seed: int) -> None:
+    """Deal + heuristic MC + any torch noise all follow this seed."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
 
 
 class _ScriptedGame(ThullaGame):
@@ -121,8 +83,7 @@ def _run_game(
     heuristic_mc_samples: int = EVAL_HEURISTIC_MC_SAMPLES,
 ) -> tuple[int, float]:
     if seed is not None:
-        random.seed(seed)
-        np.random.seed(seed)
+        _seed_everything(int(seed))
     players = []
     for i in range(4):
         if i == dmc_seat:
@@ -162,19 +123,29 @@ def evaluate_model(
     *,
     opponent: str = "random",
     dmc_seat: int = 0,
-    seed0: int = 10_000,
+    eval_seed: int = DEFAULT_EVAL_SEED,
+    seed0: int | None = None,
     heuristic_mc_samples: int = EVAL_HEURISTIC_MC_SAMPLES,
 ) -> dict:
-    """Run eval games for an in-memory model (CPU recommended)."""
+    """
+    Run eval games for an in-memory model (CPU recommended).
+
+    Uses a fixed seed bank so the same (opponent, num_games, eval_seed) always
+    replays the same deals / heuristic MC rolls — comparable across checkpoints.
+    ``seed0`` is accepted as an alias for ``eval_seed`` (legacy).
+    """
+    if seed0 is not None:
+        eval_seed = seed0
+    seeds = eval_game_seeds(num_games, opponent=opponent, eval_seed=eval_seed)
     model.eval()
     dmc = DMCPlayer("DMC", model, torch.device("cpu"))
     places = []
     rewards = []
-    for g in range(num_games):
+    for seed in seeds:
         place, reward = _run_game(
             dmc,
             dmc_seat,
-            seed=seed0 + g,
+            seed=seed,
             opponent=opponent,
             heuristic_mc_samples=heuristic_mc_samples,
         )
@@ -186,6 +157,8 @@ def evaluate_model(
     return {
         "opponent": opponent,
         "num_games": num_games,
+        "eval_seed": int(eval_seed),
+        "seed0": int(seeds[0]) if seeds else int(eval_seed),
         "p_not_last": not_last,
         "p_last": float(1.0 - not_last),
         "mean_reward": float(np.mean(rewards)),
@@ -199,25 +172,18 @@ def evaluate(
     device: str = "cpu",
     dmc_seat: int = 0,
     opponent: str = "random",
+    eval_seed: int = DEFAULT_EVAL_SEED,
 ):
-    dev = torch.device(device if device != "cpu" and torch.cuda.is_available() else "cpu")
-    model = Model(device="cpu" if dev.type == "cpu" else device)
-    state = torch.load(checkpoint, map_location=dev)
-    if isinstance(state, dict) and "model_state_dict" in state:
-        model.load_state_dict(state["model_state_dict"])
-    else:
-        model.load_state_dict(state)
-    # Always score on CPU for consistent / simpler eval.
-    cpu_model = Model(device="cpu")
-    cpu_model.load_state_dict({k: v.detach().cpu() for k, v in model.state_dict().items()})
+    model = load_model(checkpoint, device=device)
     result = evaluate_model(
-        cpu_model,
+        model,
         num_games,
         opponent=opponent,
         dmc_seat=dmc_seat,
+        eval_seed=eval_seed,
     )
     baseline = "~0.75" if opponent == "random" else "vs ComputerPlayer (fair ~0.75 if equal)"
-    print(f"Opponent: {opponent}  Games: {num_games}")
+    print(f"Opponent: {opponent}  Games: {num_games}  eval_seed: {eval_seed}")
     print(f"P(not last): {result['p_not_last']:.3f}  (baseline {baseline})")
     print(f"P(last):     {result['p_last']:.3f}")
     print(f"Mean reward: {result['mean_reward']:.3f}")
@@ -235,6 +201,12 @@ def main(argv=None):
     p.add_argument("--device", default="cpu")
     p.add_argument("--dmc_seat", type=int, default=0)
     p.add_argument(
+        "--eval_seed",
+        type=int,
+        default=DEFAULT_EVAL_SEED,
+        help="Fixed seed bank base (game i → eval_seed+i)",
+    )
+    p.add_argument(
         "--opponent",
         default="random",
         choices=["random", "heuristic"],
@@ -249,6 +221,7 @@ def main(argv=None):
         args.device,
         args.dmc_seat,
         opponent=args.opponent,
+        eval_seed=args.eval_seed,
     )
 
 

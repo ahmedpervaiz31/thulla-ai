@@ -1,0 +1,3 @@
+# Large RL weights — download from Drive, do not commit.
+*.tar
+!.gitkeep

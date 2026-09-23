@@ -8,6 +8,11 @@ from ..cards import parse_card, valid_moves
 from ..players import ComputerPlayer, choose_computer_card
 from .seats import InteractiveSeat
 
+try:
+    from thulla_dmc.player import DMCPlayer
+except ImportError:  # torch / thulla_dmc optional for pure heuristic installs
+    DMCPlayer = None  # type: ignore[misc, assignment]
+
 
 class TrickMixin:
     """Methods mixed into GameSession for the trick / reveal phases."""
@@ -142,6 +147,11 @@ class TrickMixin:
 
         self._begin_take_pass()
 
+    def _note_dmc_history(self, card):
+        hist = getattr(self, "dmc_play_history", None)
+        if hist is not None:
+            hist.append(card)
+
     def _play_cpu_card(self, seat: int) -> str:
         assert self.trick is not None
         player = self.game.players[seat]
@@ -153,7 +163,9 @@ class TrickMixin:
         legal = [c.code() for c in valid_moves(player.hand, expected)]
         # Same Ideal Move reasoning as humans — logged for bot-policy tuning.
         advice = self._snapshot_advice_for_pending()
-        if isinstance(player, ComputerPlayer):
+        if DMCPlayer is not None and isinstance(player, DMCPlayer):
+            card = player.select_card(self.game, self.trick, expected)
+        elif isinstance(player, ComputerPlayer):
             moves = valid_moves(player.hand, expected)
             card = choose_computer_card(
                 player.hand, moves, expected, view, samples=player.mc_samples
@@ -164,7 +176,9 @@ class TrickMixin:
         self._log_play(
             seat, card, hand_before=hand_before, legal=legal, advice=advice
         )
-        return self.game.apply_play(self.trick, seat, card)
+        result = self.game.apply_play(self.trick, seat, card)
+        self._note_dmc_history(card)
+        return result
 
     def play_card(self, card_code: str) -> dict:
         if not self.pending or self.pending["type"] != "play":
@@ -187,6 +201,7 @@ class TrickMixin:
             seat, card, hand_before=hand_before, legal=legal, advice=advice
         )
         result = self.game.apply_play(self.trick, seat, card)
+        self._note_dmc_history(card)
         if result != "continue":
             self._enter_trick_reveal()
         else:

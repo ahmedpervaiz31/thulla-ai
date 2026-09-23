@@ -6,10 +6,16 @@ Arcade cardroom for **Thulla** (Getaway) — play human vs AI in the browser, or
 
 ```bash
 pip install -r requirements.txt
+# DMC bot (model_best) — optional but recommended for 4-player tables:
+pip install -r requirements-dmc.txt
+# Checkpoint: model_best.tar in thulla-ai/ or workspace root (or checkpoints/)
+# Or: set THULLA_DMC_CHECKPOINT to an explicit path
 python -m uvicorn web.app:app --reload
 ```
 
 Open [http://127.0.0.1:8000](http://127.0.0.1:8000).
+
+With a loaded checkpoint, **4-player** seats use the DMC net (`bot_kind: "dmc"`, names `DMC1`…). Other player counts still use the heuristic `ComputerPlayer`.
 
 CLI (optional):
 
@@ -21,7 +27,9 @@ python main.py -p 4
 
 | Path | What |
 |------|------|
-| `thulla/` | Game engine, bots, public info, eval |
+| `thulla/` | Game engine, heuristic bot, public info, eval |
+| `thulla_dmc/` | DouZero-style DMC train / eval / app bot |
+| `checkpoints/` | Drop `model_best.tar` here for the web app |
 | `web/` | FastAPI + static arcade UI |
 | `games/ongoing/` | Live checkpoints (resume after reload) |
 | `games/completed/` | Finished games for bot review (JSON + `.md`) |

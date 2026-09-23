@@ -30,7 +30,7 @@ const TEMPLATE = `
         <span data-role="players-hint">4 PLAYERS</span>
       </div>
       <div class="players-row" data-role="players-row"></div>
-      <p class="players-note">FULL 52-CARD DECK DEALT EVENLY. AS OPENS FIRST TRICK.</p>
+      <p class="players-note">FULL 52-CARD DECK DEALT EVENLY. AS OPENS FIRST TRICK. 4 PLAYERS USE THE TRAINED DMC BOT WHEN AVAILABLE.</p>
     </div>
 
     <button type="button" class="start-btn" data-role="start-btn">▶ PRESS START • DEAL CARDS</button>
