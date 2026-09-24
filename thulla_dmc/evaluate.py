@@ -9,8 +9,9 @@ import random
 import numpy as np
 import torch
 
+from thulla.cards import valid_moves
 from thulla.game import ThullaGame
-from thulla.players import ComputerPlayer, RandomPlayer
+from thulla.players import ComputerPlayer, RandomPlayer, choose_computer_card
 
 from .env import FINISH_REWARDS
 from .models import Model
@@ -46,6 +47,18 @@ def _seed_everything(seed: int) -> None:
 class _ScriptedGame(ThullaGame):
     """Like ThullaGame.resolve_trick but routes DMC seats through choose()."""
 
+    def __init__(
+        self,
+        players,
+        *,
+        verbose: bool = False,
+        agree_stats: dict | None = None,
+        heur_mc_samples: int = EVAL_HEURISTIC_MC_SAMPLES,
+    ):
+        super().__init__(players, verbose=verbose)
+        self._agree_stats = agree_stats
+        self._heur_mc_samples = int(heur_mc_samples)
+
     def resolve_trick(self, leader_idx, first_trick=False):
         trick = self.begin_trick(leader_idx, first_trick=first_trick)
         if trick is None:
@@ -55,7 +68,23 @@ class _ScriptedGame(ThullaGame):
             player = self.players[turn_idx]
             expected = self.expected_for_seat(trick, turn_idx)
             if isinstance(player, DMCPlayer):
-                card = player.choose(self, trick, expected)
+                card = player.select_card(self, trick, expected)
+                if self._agree_stats is not None:
+                    view = self.view_for_seat(trick, turn_idx)
+                    moves = valid_moves(player.hand, expected)
+                    h_card = choose_computer_card(
+                        player.hand,
+                        moves,
+                        expected,
+                        view,
+                        samples=self._heur_mc_samples,
+                    )
+                    self._agree_stats["n"] = int(self._agree_stats.get("n", 0)) + 1
+                    if h_card == card:
+                        self._agree_stats["agree"] = (
+                            int(self._agree_stats.get("agree", 0)) + 1
+                        )
+                player.hand.remove(card)
             else:
                 view = self.view_for_seat(trick, turn_idx)
                 card = player.play_turn(expected, view)
@@ -81,6 +110,7 @@ def _run_game(
     *,
     opponent: str = "random",
     heuristic_mc_samples: int = EVAL_HEURISTIC_MC_SAMPLES,
+    agree_stats: dict | None = None,
 ) -> tuple[int, float]:
     if seed is not None:
         _seed_everything(int(seed))
@@ -93,7 +123,12 @@ def _run_game(
             dmc.reset_history()
         else:
             players.append(_make_opponent(opponent, f"O{i}", heuristic_mc_samples))
-    game = _ScriptedGame(players, verbose=False)
+    game = _ScriptedGame(
+        players,
+        verbose=False,
+        agree_stats=agree_stats,
+        heur_mc_samples=heuristic_mc_samples,
+    )
     dmc.game = game
     game.shuffle_and_deal()
     leader = game.ace_spades_holder_idx
@@ -126,6 +161,7 @@ def evaluate_model(
     eval_seed: int = DEFAULT_EVAL_SEED,
     seed0: int | None = None,
     heuristic_mc_samples: int = EVAL_HEURISTIC_MC_SAMPLES,
+    track_heur_agree: bool | None = None,
 ) -> dict:
     """
     Run eval games for an in-memory model (CPU recommended).
@@ -133,14 +169,20 @@ def evaluate_model(
     Uses a fixed seed bank so the same (opponent, num_games, eval_seed) always
     replays the same deals / heuristic MC rolls — comparable across checkpoints.
     ``seed0`` is accepted as an alias for ``eval_seed`` (legacy).
+
+    When ``track_heur_agree`` is True, each DMC card play is compared to what
+    ``ComputerPlayer`` would pick on the same state (diagnostic; not a loss).
+    Default: enabled only for ``opponent="heuristic"`` (keeps random evals fast).
     """
     if seed0 is not None:
         eval_seed = seed0
-    seeds = eval_game_seeds(num_games, opponent=opponent, eval_seed=eval_seed)
-    model.eval()
+    if track_heur_agree is None:
+        track_heur_agree = opponent == "heuristic"
+    seeds = eval_game_seeds(num_games, opponent=opponent, eval_seed=eval_seed)    model.eval()
     dmc = DMCPlayer("DMC", model, torch.device("cpu"))
     places = []
     rewards = []
+    agree_stats: dict | None = {"n": 0, "agree": 0} if track_heur_agree else None
     for seed in seeds:
         place, reward = _run_game(
             dmc,
@@ -148,12 +190,16 @@ def evaluate_model(
             seed=seed,
             opponent=opponent,
             heuristic_mc_samples=heuristic_mc_samples,
+            agree_stats=agree_stats,
         )
         places.append(place)
         rewards.append(reward)
 
     places_a = np.array(places)
     not_last = float(np.mean(places_a < 3))
+    n_cmp = int(agree_stats["n"]) if agree_stats else 0
+    n_agree = int(agree_stats["agree"]) if agree_stats else 0
+    heur_agree = float(n_agree / n_cmp) if n_cmp > 0 else float("nan")
     return {
         "opponent": opponent,
         "num_games": num_games,
@@ -163,6 +209,9 @@ def evaluate_model(
         "p_last": float(1.0 - not_last),
         "mean_reward": float(np.mean(rewards)),
         "places": places_a.tolist(),
+        "heur_agree": heur_agree,
+        "heur_agree_n": n_cmp,
+        "heur_agree_hits": n_agree,
     }
 
 
@@ -191,6 +240,11 @@ def evaluate(
         f"Finish histogram (0=1st … 3=last): "
         f"{np.bincount(result['places'], minlength=4).tolist()}"
     )
+    if result.get("heur_agree_n", 0) > 0:
+        print(
+            f"Heuristic pick agree: {result['heur_agree']:.3f} "
+            f"({result['heur_agree_hits']}/{result['heur_agree_n']} card plays)"
+        )
     return result
 
 

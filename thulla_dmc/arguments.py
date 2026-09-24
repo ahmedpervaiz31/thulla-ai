@@ -16,6 +16,14 @@ def parser() -> argparse.ArgumentParser:
         help="Minutes between Drive/local latest checkpoints (default: 3)",
     )
     p.add_argument("--load_model", action="store_true")
+    p.add_argument(
+        "--init_from",
+        default="",
+        help=(
+            "Load model weights from this .tar/.ckpt into a fresh run "
+            "(episodes=0, new optimizer). Use with a new --xpid after reward changes."
+        ),
+    )
     p.add_argument("--disable_checkpoint", action="store_true")
     p.add_argument(
         "--training_device",

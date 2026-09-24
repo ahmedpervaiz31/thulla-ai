@@ -21,7 +21,8 @@ from .encode import (
 )
 
 # Finish-rank rewards for 4 players (1st away … last).
-FINISH_REWARDS = (1.2, 1.1, 1.0, -1.0)
+# Wider 1st/2nd gaps than the old (1.2, 1.1, 1.0, -1.0) to prefer placing high, not only avoiding last.
+FINISH_REWARDS = (2.0, 1.5, 1.0, -1.0)
 
 
 class DummySeat(BasePlayer):

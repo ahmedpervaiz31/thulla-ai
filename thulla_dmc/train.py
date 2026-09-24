@@ -190,7 +190,8 @@ def _checkpoint_paths(flags) -> dict[str, str]:
 
 
 _EVAL_LOG_HEADER = (
-    "timestamp,episodes,opponent,games,p_not_last,p_last,mean_reward,is_best,eval_seed\n"
+    "timestamp,episodes,opponent,games,p_not_last,p_last,mean_reward,"
+    "is_best,eval_seed,heur_agree\n"
 )
 
 
@@ -201,10 +202,12 @@ def append_eval_log(flags, episodes: int, ev: dict, *, is_best: bool = False) ->
     new_file = not os.path.exists(path)
     ts = time.strftime("%Y-%m-%d %H:%M:%S")
     seed = ev.get("eval_seed", getattr(flags, "eval_seed", ""))
+    ha = ev.get("heur_agree", float("nan"))
+    ha_s = f"{ha:.4f}" if ha == ha else ""  # NaN → empty
     row = (
         f"{ts},{episodes},{ev.get('opponent','')},{ev.get('num_games',0)},"
         f"{ev.get('p_not_last',0):.4f},{ev.get('p_last',0):.4f},"
-        f"{ev.get('mean_reward',0):.4f},{int(bool(is_best))},{seed}\n"
+        f"{ev.get('mean_reward',0):.4f},{int(bool(is_best))},{seed},{ha_s}\n"
     )
     with open(path, "a", encoding="utf-8") as f:
         if new_file:
@@ -259,6 +262,19 @@ def load_checkpoint(flags, learner: Model, optimizer, device: torch.device):
     stats = data.get("stats", {})
     log.info("Resumed from %s (episodes=%s)", path, episodes)
     return episodes, stats
+
+
+def init_weights_from(path: str, learner: Model, device: torch.device) -> None:
+    """Load model weights only (for new xpid / reward fine-tune). Fresh optimizer/episodes."""
+    data = torch.load(path, map_location=device)
+    if isinstance(data, dict) and "model_state_dict" in data:
+        learner.load_state_dict(data["model_state_dict"])
+    else:
+        learner.load_state_dict(data)
+    log.info(
+        "Initialized weights from %s (episodes=0, fresh optimizer; keep old xpid as baseline)",
+        path,
+    )
 
 
 def learn_batch(learner: Model, optimizer, batch: list[dict], device: torch.device, max_grad_norm: float):
@@ -338,17 +354,21 @@ def train(flags=None):
 
     actor_envs = max(1, int(getattr(flags, "actor_envs", 8)))
     device = _device_of(flags)
+    from .env import FINISH_REWARDS
+
     if device.type == "cuda":
         torch.backends.cudnn.benchmark = True
         gpu_name = torch.cuda.get_device_name(device)
         log.info(
             "GPU learner: %s (%s) | actors=%s envs/actor=%s | batch=%s | "
-            "eval random every %s min | heuristic every %s min (%s games, seed=%s)",
+            "rewards=%s | eval random every %s min | heuristic every %s min "
+            "(%s games, seed=%s)",
             device,
             gpu_name,
             flags.num_actors,
             actor_envs,
             flags.batch_size,
+            FINISH_REWARDS,
             flags.eval_random_minutes,
             flags.eval_heuristic_minutes,
             flags.eval_games,
@@ -356,11 +376,12 @@ def train(flags=None):
         )
     else:
         log.info(
-            "Training on %s | actors=%s envs/actor=%s | batch=%s | eval_seed=%s",
+            "Training on %s | actors=%s envs/actor=%s | batch=%s | rewards=%s | eval_seed=%s",
             device,
             flags.num_actors,
             actor_envs,
             flags.batch_size,
+            FINISH_REWARDS,
             getattr(flags, "eval_seed", 10_000),
         )
 
@@ -379,6 +400,12 @@ def train(flags=None):
     if flags.load_model:
         episodes_done, loaded = load_checkpoint(flags, learner, optimizer, device)
         stats.update(loaded or {})
+    elif getattr(flags, "init_from", ""):
+        init_path = flags.init_from
+        if not os.path.isfile(init_path):
+            raise FileNotFoundError(f"--init_from not found: {init_path}")
+        init_weights_from(init_path, learner, device)
+        episodes_done = 0
 
     ctx_weight: mp.Queue = mp.Queue(maxsize=flags.num_actors * 2)
     out_queue: mp.Queue = mp.Queue(maxsize=64)
@@ -487,6 +514,8 @@ def train(flags=None):
                     eval_seed=getattr(flags, "eval_seed", 10_000),
                 )
                 stats["p_not_last_heuristic"] = ev["p_not_last"]
+                if "heur_agree" in ev and ev.get("heur_agree_n", 0) > 0:
+                    stats["heur_agree_heuristic"] = ev["heur_agree"]
                 best = float(stats.get("best_p_not_last_heuristic", -1.0))
                 is_best = ev["p_not_last"] > best
                 if is_best:
@@ -497,13 +526,14 @@ def train(flags=None):
                 log_path = append_eval_log(flags, episodes_done, ev, is_best=is_best)
                 log.info(
                     "EVAL vs heuristic  episodes=%s games=%s seed=%s P(not last)=%.3f P(last)=%.3f "
-                    "mean_reward=%.3f best=%s → %s",
+                    "mean_reward=%.3f heur_agree=%.3f best=%s → %s",
                     episodes_done,
                     flags.eval_games,
                     ev.get("eval_seed", getattr(flags, "eval_seed", "")),
                     ev["p_not_last"],
                     ev["p_last"],
                     ev["mean_reward"],
+                    ev.get("heur_agree", float("nan")),
                     is_best,
                     log_path,
                 )

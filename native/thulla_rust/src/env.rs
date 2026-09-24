@@ -7,7 +7,7 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use rand::seq::SliceRandom;
 
-pub const FINISH_REWARDS: [f32; 4] = [1.2, 1.1, 1.0, -1.0];
+pub const FINISH_REWARDS: [f32; 4] = [2.0, 1.5, 1.0, -1.0];
 
 #[derive(Clone, Debug)]
 pub struct Env {
